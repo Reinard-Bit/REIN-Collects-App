@@ -1,0 +1,6 @@
+{
+  "name": "Bandit Vault",
+  "description": "Inventory and business management app for a Pokémon TCG store.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

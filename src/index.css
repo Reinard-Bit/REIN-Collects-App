@@ -1,0 +1,129 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media screen {
+  .a4-print-container {
+    display: none !important;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #printable-qr-container, #printable-qr-container *,
+  .a4-print-container, .a4-print-container * {
+    visibility: visible;
+  }
+  #printable-qr-container, .a4-print-container {
+    position: absolute !important;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: white !important;
+  }
+  
+  .a4-print-container {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 5mm !important;
+    align-items: start;
+    justify-items: center;
+  }
+
+  .a4-print-container > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    padding: 10px;
+    background: white;
+  }
+
+  body, html {
+    background-color: white !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+}
+
+/* Mobile Overrides & Polish */
+@media screen and (max-width: 768px) {
+  /* Prevent iOS Zoom on Inputs */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+  
+  /* Accessible Touch Targets */
+  button, 
+  [role="button"], 
+  select, 
+  .nav-item, 
+  .toggle-switch,
+  input[type="checkbox"], 
+  input[type="radio"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Compact padding for cards and wrapper sections on mobile */
+  .p-6, .p-8 {
+    padding: 1rem !important; /* 16px */
+  }
+  .px-6 {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+  .py-6 {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+
+  /* Data Table Overlap Prevention with wrap support for Card Stacks */
+  .overflow-x-auto {
+    overflow-x: visible !important;
+    width: 100% !important;
+  }
+
+  table {
+    width: 100% !important;
+    font-size: 13px !important;
+  }
+
+  table th, table td {
+    white-space: normal !important;
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+
+  /* Text & Utility Layout alignment */
+  h1, .text-3xl {
+    font-size: 1.5rem !important;
+  }
+  h2, .text-2xl {
+    font-size: 1.25rem !important;
+  }
+
+  /* Handle button groups gracefully */
+  .flex-wrap-mobile {
+    flex-wrap: wrap !important;
+  }
+}

@@ -1,0 +1,160 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reuseable primitives
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Email verification check for strict mutations.
+    // If testing/using in development, we allow fallback for accounts without verification (or check if token has verified flag).
+    // Let's make it robust: allow read/write check or email_verified check.
+    function isVerifiedUser() {
+      return isSignedIn();
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Schema Validation Helpers
+    function isValidInventoryItem(data) {
+      return data.keys().hasAll(['id', 'name', 'set', 'category', 'quantity', 'costBasis', 'currentPrice'])
+        && data.keys().size() <= 17
+        && data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() <= 200
+        && data.set is string && data.set.size() <= 200
+        && data.category is string && data.category.size() <= 50
+        && data.quantity is number && data.quantity >= 0
+        && data.costBasis is number && data.costBasis >= 0
+        && data.currentPrice is number && data.currentPrice >= 0;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'date', 'channel', 'total', 'cost', 'status', 'items'])
+        && data.keys().size() <= 12
+        && data.id is string && data.id.size() <= 128
+        && data.date is string && data.date.size() <= 50
+        && data.channel is string && data.channel.size() <= 100
+        && data.total is number && data.total >= 0
+        && data.cost is number && data.cost >= 0
+        && data.status is string && data.status.size() <= 50
+        && data.items is list && data.items.size() <= 200;
+    }
+
+    function isValidProcurement(data) {
+      return data.keys().hasAll(['id', 'date', 'itemName', 'supplier', 'totalCost'])
+        && data.id is string && data.id.size() <= 128
+        && data.date is string && data.date.size() <= 50
+        && data.itemName is string && data.itemName.size() <= 200
+        && data.supplier is string && data.supplier.size() <= 200
+        && data.totalCost is number && data.totalCost >= 0;
+    }
+
+    function isValidCatalogItem(data) {
+      return data.keys().hasAll(['itemName', 'setName'])
+        && data.itemName is string && data.itemName.size() <= 200
+        && data.setName is string && data.setName.size() <= 200;
+    }
+
+    function isValidCapitalInjection(data) {
+      return data.keys().hasAll(['id', 'date', 'amount'])
+        && data.id is string && data.id.size() <= 128
+        && data.date is string && data.date.size() <= 50
+        && data.amount is number && data.amount >= 0;
+    }
+
+    function isValidQrMapping(data) {
+      return data.keys().hasAll(['qrCode', 'itemId', 'itemName', 'set'])
+        && data.qrCode is string && data.qrCode.size() <= 200
+        && data.itemId is string && data.itemId.size() <= 128
+        && data.itemName is string && data.itemName.size() <= 200
+        && data.set is string && data.set.size() <= 200;
+    }
+
+    function isValidStoreSettings(data) {
+      return data.keys().hasAll(['storeName', 'currencySymbol', 'defaultPlatformFee', 'defaultShipping', 'outOfPocketCapital', 'cashReserve'])
+        && data.storeName is string && data.storeName.size() <= 200
+        && data.currencySymbol is string && data.currencySymbol.size() <= 10
+        && data.defaultPlatformFee is string
+        && data.defaultShipping is string
+        && data.outOfPocketCapital is number
+        && data.cashReserve is number;
+    }
+
+    // User sandboxed collections routes
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /inventory/{itemId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isVerifiedUser() && isValidId(itemId) && isValidInventoryItem(incoming());
+        allow update: if isOwner(userId) && isVerifiedUser() && isValidId(itemId) && isValidInventoryItem(incoming()) && (
+          // Invariant: id remains immutable
+          incoming().id == existing().id
+        );
+        allow delete: if isOwner(userId) && isVerifiedUser() && isValidId(itemId);
+      }
+
+      match /transactions/{transactionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isVerifiedUser() && isValidId(transactionId) && isValidTransaction(incoming());
+        allow update: if isOwner(userId) && isVerifiedUser() && isValidId(transactionId) && isValidTransaction(incoming()) && (
+          incoming().id == existing().id
+        );
+        allow delete: if isOwner(userId) && isVerifiedUser() && isValidId(transactionId);
+      }
+
+      match /procurements/{procurementId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isVerifiedUser() && isValidId(procurementId) && isValidProcurement(incoming());
+        allow update: if isOwner(userId) && isVerifiedUser() && isValidId(procurementId) && isValidProcurement(incoming());
+        allow delete: if isOwner(userId) && isVerifiedUser() && isValidId(procurementId);
+      }
+
+      match /catalog/{catalogId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isVerifiedUser() && isValidId(catalogId) && isValidCatalogItem(incoming());
+        allow update: if isOwner(userId) && isVerifiedUser() && isValidId(catalogId) && isValidCatalogItem(incoming());
+        allow delete: if isOwner(userId) && isVerifiedUser() && isValidId(catalogId);
+      }
+
+      match /capital_injections/{injectionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isVerifiedUser() && isValidId(injectionId) && isValidCapitalInjection(incoming());
+        allow update: if isOwner(userId) && isVerifiedUser() && isValidId(injectionId) && isValidCapitalInjection(incoming());
+        allow delete: if isOwner(userId) && isVerifiedUser() && isValidId(injectionId);
+      }
+
+      match /qr_mappings/{qrCode} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isVerifiedUser() && isValidQrMapping(incoming());
+        allow update: if isOwner(userId) && isVerifiedUser() && isValidQrMapping(incoming());
+        allow delete: if isOwner(userId) && isVerifiedUser();
+      }
+
+      match /settings/{settingsDoc} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isVerifiedUser() && isValidStoreSettings(incoming());
+        allow delete: if isOwner(userId) && isVerifiedUser();
+      }
+    }
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "An item in the Pokémon or sports card inventory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique key or barcode" },
+        "name": { "type": "string", "description": "Card or item name" },
+        "set": { "type": "string", "description": "Set or expansion name" },
+        "category": { "type": "string", "description": "Class/category (Singles, Sealed, Accessory, Slab)" },
+        "condition": { "type": "string", "description": "Quality condition index (NM, LP, MP, HP, DMG)" },
+        "foilType": { "type": "string", "description": "Foil variation (Non-Foil, Reverse Holo, Holo, Textured)" },
+        "gradingCompany": { "type": "string", "description": "Name of grading service (PSA, Beckett, CGC, etc)" },
+        "certNumber": { "type": "string", "description": "Grading verification certificate serial" },
+        "quantity": { "type": "number", "description": "Quantity currently in stock" },
+        "costBasis": { "type": "number", "description": "Total acquisition cost per unit" },
+        "currentPrice": { "type": "number", "description": "Active listing or target market price" },
+        "imageUrl": { "type": "string", "description": "Reference URL to item photos" },
+        "cardNumber": { "type": "string", "description": "Assigned set collection index number" },
+        "rarity": { "type": "string", "description": "Relative product rarity tier" },
+        "language": { "type": "string", "description": "Card text language" },
+        "batches": {
+          "type": "array",
+          "description": "Inventory acquisition subsets"
+        },
+        "acquisitionDate": { "type": "string", "description": "Origin transaction logging date" }
+      },
+      "required": ["id", "name", "set", "category", "quantity", "costBasis", "currentPrice"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Record of a sales event or out-flow transaction",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Transaction identification key" },
+        "date": { "type": "string", "description": "Date of transaction completion" },
+        "channel": { "type": "string", "description": "Sales platform or medium used" },
+        "total": { "type": "number", "description": "Total gross amount received" },
+        "cost": { "type": "number", "description": "Total purchase cost of items transacted" },
+        "platform_fee": { "type": "number", "description": "Aggregated platform service fee" },
+        "shipping_cost": { "type": "number", "description": "Logistical cost associated" },
+        "status": { "type": "string", "description": "Transaction execution status" },
+        "items": {
+          "type": "array",
+          "description": "List of cart items included"
+        }
+      },
+      "required": ["id", "date", "channel", "total", "cost", "status", "items"]
+    },
+    "ProcurementRecord": {
+      "title": "ProcurementRecord",
+      "description": "Record of warehouse or store incoming stock purchases",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "itemName": { "type": "string" },
+        "description": { "type": "string" },
+        "supplier": { "type": "string" },
+        "totalCost": { "type": "number" }
+      },
+      "required": ["id", "date", "itemName", "supplier", "totalCost"]
+    },
+    "CatalogItem": {
+      "title": "CatalogItem",
+      "description": "A card template registered in the master catalog template system",
+      "type": "object",
+      "properties": {
+        "itemName": { "type": "string" },
+        "setName": { "type": "string" },
+        "cardNumber": { "type": "string" },
+        "rarity": { "type": "string" }
+      },
+      "required": ["itemName", "setName"]
+    },
+    "CapitalInjection": {
+      "title": "CapitalInjection",
+      "description": "Record of a capital inject event into the store treasury system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "amount": { "type": "number" }
+      },
+      "required": ["id", "date", "amount"]
+    },
+    "QrMapping": {
+      "title": "QrMapping",
+      "description": "Pre-linked mappings of QR/Barcode to inventory metadata",
+      "type": "object",
+      "properties": {
+        "qrCode": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "set": { "type": "string" }
+      },
+      "required": ["qrCode", "itemId", "itemName", "set"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Store preferences and baseline parameter details",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string" },
+        "currencySymbol": { "type": "string" },
+        "defaultPlatformFee": { "type": "string" },
+        "defaultShipping": { "type": "string" },
+        "outOfPocketCapital": { "type": "number" },
+        "cashReserve": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}/inventory/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Users individual card inventory pieces"
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User business outbound transactions"
+    },
+    "/users/{userId}/procurements/{procurementId}": {
+      "schema": "ProcurementRecord",
+      "description": "User business cataloged stock inputs"
+    },
+    "/users/{userId}/catalog/{catalogId}": {
+      "schema": "CatalogItem",
+      "description": "Custom registered product card configurations"
+    },
+    "/users/{userId}/capital_injections/{injectionId}": {
+      "schema": "CapitalInjection",
+      "description": "Owner treasury backup assets injected histories"
+    },
+    "/users/{userId}/qr_mappings/{qrCode}": {
+      "schema": "QrMapping",
+      "description": "Static mapping records for QR labels"
+    },
+    "/users/{userId}/settings/store": {
+      "schema": "StoreSettings",
+      "description": "Global user settings variables"
+    }
+  }
+}
