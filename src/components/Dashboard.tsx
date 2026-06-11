@@ -1,5 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { formatIDR } from '../utils/currency';
+import { collection, onSnapshot, query, where, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useFirebase } from '../contexts/FirebaseContext';
 import { NewSaleDrawer } from './NewSaleDrawer';
 import {
   DollarSign,
@@ -11,6 +14,10 @@ import {
   BrainCircuit,
   CheckCircle2,
   X,
+  Edit2,
+  Trash2,
+  Calendar,
+  History,
 } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
 
@@ -25,6 +32,20 @@ interface DashboardProps {
   capitalInjections?: any[];
   procurementRecords?: any[];
 }
+
+const formatDate = (dateVal: any) => {
+  if (!dateVal) return 'N/A';
+  let d: Date;
+  if (dateVal && typeof dateVal.toDate === 'function') {
+    d = dateVal.toDate();
+  } else if (dateVal instanceof Date) {
+    d = dateVal;
+  } else {
+    d = new Date(dateVal);
+  }
+  if (isNaN(d.getTime())) return 'N/A';
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+};
 
 export function Dashboard({ 
   inventory, 
@@ -41,7 +62,116 @@ export function Dashboard({
   const [successMsg, setSuccessMsg] = useState(false);
   const [isInjectModalOpen, setIsInjectModalOpen] = useState(false);
   const [injectAmount, setInjectAmount] = useState('');
-  const [activeLedgerModal, setActiveLedgerModal] = useState<'total' | 'cash' | 'active' | null>(null);
+  const [activeLedgerModal, setActiveLedgerModal] = useState<'total' | 'cash' | 'active' | 'procurement' | null>(null);
+  const { user } = useFirebase();
+  const [totalCapital, setTotalCapital] = useState(0);
+  const [capitalAtRisk, setCapitalAtRisk] = useState(0);
+  const [exposureEvents, setExposureEvents] = useState<any[]>([]);
+
+  useEffect(() => {
+    const userId = user?.uid || "zJr2YmhFGrWLXH6RZ4CM5hiBOD82";
+    const q = query(collection(db, "users", userId, "capital_injections"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let sum = 0;
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        const amount = typeof data.amount === 'number' ? data.amount : parseFloat(data.amount) || 0;
+        sum += amount;
+      });
+      setTotalCapital(sum);
+    }, (error) => {
+      console.error("Error aggregating capital injections:", error);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    const userId = user?.uid || "zJr2YmhFGrWLXH6RZ4CM5hiBOD82";
+    const q = query(collection(db, "users", userId, "inventory"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      let totalInventoryCost = 0;
+      const events: any[] = [];
+
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data();
+        const costBasisVal = typeof item.costBasis === 'number' ? item.costBasis : parseFloat(item.costBasis) || 0;
+
+        // Keep the total stock cost basis exposure calculation based ONLY on items where status === "active"
+        if (item.status === "active") {
+          const quantity = typeof item.quantity === 'number' 
+            ? item.quantity 
+            : (item.quantity !== undefined ? parseFloat(item.quantity) || 1 : 1);
+          totalInventoryCost += costBasisVal * quantity;
+        }
+
+        const namePart = item.name || '';
+        const setPart = item.set || '';
+        const itemDNA = `${namePart} ${setPart}`.trim();
+
+        // Rule A: For EVERY item in the snapshot, push a "Procurement" event object into the array.
+        events.push({
+          id: docSnap.id + '-procurement',
+          date: item.dateAdded || item.acquisitionDate,
+          type: "Risk Added (Procurement)",
+          itemDNA,
+          impact: costBasisVal
+        });
+
+        // Rule B: If an item has status === "sold", push a SECOND event object into the array.
+        if (item.status === "sold") {
+          events.push({
+            id: docSnap.id + '-sale',
+            date: item.soldAt,
+            type: "Risk Cleared (Sale)",
+            itemDNA,
+            impact: -Math.abs(costBasisVal)
+          });
+        }
+      });
+
+      setCapitalAtRisk(totalInventoryCost);
+
+      const parseDateVal = (dateVal: any) => {
+        if (!dateVal) return 0;
+        if (typeof dateVal.toDate === 'function') {
+          return dateVal.toDate().getTime();
+        }
+        if (dateVal instanceof Date) {
+          return dateVal.getTime();
+        }
+        try {
+          const str = String(dateVal);
+          const parts = str.split(' ');
+          if (parts.length === 3) {
+            const months: { [key: string]: number } = {
+              jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+              jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+            };
+            const day = parseInt(parts[0], 10);
+            const month = months[parts[1].toLowerCase().substring(0, 3)] || 0;
+            const year = parseInt(parts[2], 10);
+            return new Date(year, month, day).getTime();
+          }
+          return Date.parse(str) || 0;
+        } catch {
+          return 0;
+        }
+      };
+
+      // Sort combined array by date descending (newest events at the top)
+      events.sort((a, b) => {
+        const timeA = parseDateVal(a.date);
+        const timeB = parseDateVal(b.date);
+        if (timeB !== timeA) return timeB - timeA;
+        return b.id.localeCompare(a.id);
+      });
+
+      setExposureEvents(events);
+    }, (error) => {
+      console.error("Error aggregating inventory capital exposure:", error);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   const handleAddAndShowSuccess = (t: any) => {
     onAddTransaction(t);
@@ -58,11 +188,58 @@ export function Dashboard({
     }
   };
 
+  const handleDelete = async (type: string, id: string) => {
+    if (!user) return;
+    if (window.confirm('Are you sure you want to delete this record?')) {
+      try {
+        let collectionName = '';
+        if (type === 'injection') collectionName = 'capital_injections';
+        else if (type === 'sale') collectionName = 'transactions';
+        else if (type === 'procurement') collectionName = 'procurements';
+        
+        if (collectionName) {
+          await deleteDoc(doc(db, `users/${user.uid}/${collectionName}`, id));
+        }
+      } catch (error) {
+        console.error('Error deleting record:', error);
+      }
+    }
+  };
+
+  const handleEdit = async (type: string, id: string, currentAmount: number) => {
+    if (!user) return;
+    const newValue = window.prompt('Enter new amount (IDR):', currentAmount.toString());
+    if (newValue !== null && !isNaN(parseFloat(newValue))) {
+      try {
+        const numValue = parseFloat(newValue);
+        let collectionName = '';
+        let updateData: any = {};
+        
+        if (type === 'injection') {
+          collectionName = 'capital_injections';
+          updateData = { amount: numValue };
+        } else if (type === 'sale') {
+          collectionName = 'transactions';
+          updateData = { total: numValue };
+        } else if (type === 'procurement') {
+          collectionName = 'procurements';
+          updateData = { totalCost: numValue };
+        }
+        
+        if (collectionName) {
+          await updateDoc(doc(db, `users/${user.uid}/${collectionName}`, id), updateData);
+        }
+      } catch (error) {
+        console.error('Error updating record:', error);
+      }
+    }
+  };
+
   const totalRealizedProfits = transactions.reduce((sum, trx) => sum + (trx.total - trx.cost - trx.platform_fee - trx.shipping_cost), 0);
-  const activeInventoryValue = inventory.reduce((sum, item) => sum + ((item.currentPrice || 0) * item.quantity), 0);
+  const activeInventoryValue = inventory.filter(i => i.status === 'active').reduce((sum, item) => sum + ((item.currentPrice || 0) * item.quantity), 0);
 
   const smartFlipLabel = cashReserve > outOfPocketCapital ? 'Capital Surplus' : 'Active Capital at Risk';
-  const smartFlipValue = cashReserve > outOfPocketCapital ? cashReserve - outOfPocketCapital : outOfPocketCapital - cashReserve;
+  const smartFlipValue = cashReserve > outOfPocketCapital ? cashReserve - outOfPocketCapital : capitalAtRisk;
   const isSurplus = cashReserve > outOfPocketCapital;
 
   // Chronological cash reserve movements helper
@@ -196,6 +373,12 @@ export function Dashboard({
         </h2>
         <div className="flex flex-wrap gap-2 sm:gap-3">
           <button 
+            onClick={() => setActiveLedgerModal('procurement')}
+            className="px-4 py-2 text-sm font-medium bg-white border border-[#961b2b]/20 text-[#961b2b] hover:text-[#961b2b] rounded-lg hover:bg-[#961b2b]/5 transition-all shadow-sm flex items-center gap-1.5 min-h-[44px]"
+          >
+            <History size={14} /> View Procurement History
+          </button>
+          <button 
             onClick={() => setIsInjectModalOpen(true)}
             className="px-4 py-2 text-sm font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors shadow-sm min-h-[44px]"
           >
@@ -213,7 +396,7 @@ export function Dashboard({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <MetricCard
           title="Total Out-of-Pocket Capital"
-          value={formatIDR(outOfPocketCapital)}
+          value={formatIDR(totalCapital)}
           trend="Base Investment"
           isPositive={null}
           icon={<DollarSign className="text-gray-500" size={20} />}
@@ -221,9 +404,9 @@ export function Dashboard({
         />
         <MetricCard
           title="Cash Reserve (Wallet)"
-          value={formatIDR(cashReserve)}
-          trend={cashReserve >= outOfPocketCapital ? 'Profitable' : 'Deficit'}
-          isPositive={cashReserve >= outOfPocketCapital}
+          value={formatIDR(totalCapital)}
+          trend={totalCapital >= totalCapital ? 'Profitable' : 'Deficit'}
+          isPositive={totalCapital >= totalCapital}
           icon={<TrendingUp className="text-[#961b2b]" size={20} />}
           onClick={() => setActiveLedgerModal('cash')}
         />
@@ -417,7 +600,7 @@ export function Dashboard({
               <div className="bg-[#961b2b]/5 border border-[#961b2b]/15 rounded-xl p-4 flex justify-between items-center font-mono">
                 <div>
                   <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Total Base Investment</span>
-                  <span className="text-2xl font-extrabold text-[#961b2b]">{formatIDR(outOfPocketCapital)}</span>
+                  <span className="text-2xl font-extrabold text-[#961b2b]">{formatIDR(totalCapital)}</span>
                 </div>
                 <div className="text-right">
                   <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Injections Logs</span>
@@ -435,12 +618,13 @@ export function Dashboard({
                         <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Movement Type</th>
                         <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Reference ID</th>
                         <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Injected Amount</th>
+                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-mono text-gray-705">
                       {capitalInjections.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-5 py-8 text-center text-gray-500 font-sans">
+                          <td colSpan={5} className="px-5 py-8 text-center text-gray-500 font-sans">
                             No manual capital injections recorded yet. Use "Inject Capital" to fund operations.
                           </td>
                         </tr>
@@ -455,6 +639,24 @@ export function Dashboard({
                             </td>
                             <td className="px-5 py-3 text-gray-400 text-[11px]">{inj.id}</td>
                             <td className="px-5 py-3 text-right text-emerald-600 font-bold">{formatIDR(inj.amount)}</td>
+                            <td className="px-5 py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <button 
+                                  onClick={() => handleEdit('injection', inj.id, inj.amount)}
+                                  className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-blue-600 transition-colors"
+                                  title="Edit"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDelete('injection', inj.id)}
+                                  className="p-1 hover:bg-red-50 rounded text-gray-500 hover:text-red-600 transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         ))
                       )}
@@ -505,8 +707,8 @@ export function Dashboard({
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex justify-between items-center font-mono">
                 <div>
                   <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Active Liquid Wallet Balance</span>
-                  <span className={`text-2xl font-extrabold ${cashReserve >= 0 ? 'text-[#961b2b]' : 'text-red-600'}`}>
-                    {formatIDR(cashReserve)}
+                  <span className={`text-2xl font-extrabold ${totalCapital >= 0 ? 'text-[#961b2b]' : 'text-red-600'}`}>
+                    {formatIDR(totalCapital)}
                   </span>
                 </div>
                 <div className="text-right">
@@ -525,12 +727,13 @@ export function Dashboard({
                         <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Flow</th>
                         <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Source description</th>
                         <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Cash Impact</th>
+                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-mono text-gray-705">
                       {sortedCashMovements.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-5 py-8 text-center text-gray-500 font-sans">
+                          <td colSpan={5} className="px-5 py-8 text-center text-gray-500 font-sans">
                             No cash reserve movements registered in the wallet ledger yet.
                           </td>
                         </tr>
@@ -556,6 +759,24 @@ export function Dashboard({
                             }`}>
                               {move.impact === 'inflow' ? '+' : '-'}{formatIDR(move.amount).replace('Rp', '').trim()}
                             </td>
+                            <td className="px-5 py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <button 
+                                  onClick={() => handleEdit(move.type, move.id, move.amount)}
+                                  className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-blue-600 transition-colors"
+                                  title="Edit"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDelete(move.type, move.id)}
+                                  className="p-1 hover:bg-red-50 rounded text-gray-500 hover:text-red-600 transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         ))
                       )}
@@ -580,8 +801,8 @@ export function Dashboard({
 
       {/* 3. Active Capital Ledger Modal */}
       {activeLedgerModal === 'active' && (() => {
-        const unsoldItems = inventory.filter(item => item.quantity > 0);
-        const totalActiveCost = unsoldItems.reduce((sum, item) => sum + (item.costBasis * item.quantity), 0);
+        const unsoldItems = inventory.filter(item => item.quantity > 0 && item.status === 'active');
+        const totalActiveCost = capitalAtRisk;
         
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -593,8 +814,8 @@ export function Dashboard({
               {/* Header */}
               <div className="p-5 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900">Active Capital ("At Risk") Ledger</h3>
-                  <p className="text-xs text-gray-500 mt-1">Live tracking of capital actively tied up inside physical unsold inventory stock.</p>
+                  <h3 className="text-lg font-bold text-gray-900">Active Capital ("Risk Flow") Ledger</h3>
+                  <p className="text-xs text-gray-500 mt-1">Chronological exposure timeline of physical inventory life cycle (Procurements and Sales).</p>
                 </div>
                 <button 
                   onClick={() => setActiveLedgerModal(null)}
@@ -622,43 +843,49 @@ export function Dashboard({
                 <div className="border border-gray-200 rounded-xl overflow-hidden">
                   <div className="overflow-x-auto max-h-[45vh]">
                     <table className="w-full text-left text-xs whitespace-nowrap">
-                      <thead className="bg-gray-50 text-gray-500 border-b border-gray-200 sticky top-0 z-10">
+                      <thead className="bg-gray-50 text-gray-500 border-b border-gray-200 sticky top-0 z-10 font-sans">
                         <tr>
-                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Unsold Item Name</th>
-                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Classification</th>
-                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-center">In Stock</th>
-                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Unit basis</th>
-                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Subtotal cost</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Date</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Event Type</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Item Description</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Exposure Impact</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 font-mono text-gray-705 text-[11px]">
-                        {unsoldItems.length === 0 ? (
+                        {exposureEvents.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="px-5 py-8 text-center text-gray-500 font-sans">
-                              Your physical inventory is currently completely sold out! No sleeping active capital.
+                            <td colSpan={4} className="px-5 py-8 text-center text-gray-500 font-sans">
+                              No exposure events are recorded in your risk flow timeline.
                             </td>
                           </tr>
                         ) : (
-                          unsoldItems.map((item, idx) => (
-                            <tr key={`${item.id}-${idx}`} className="hover:bg-gray-50/50 transition-colors">
-                              <td className="px-5 py-3 text-gray-800 font-sans min-w-[150px]">
-                                <div className="font-bold leading-tight text-sm line-clamp-1 break-words whitespace-normal">{item.name}</div>
-                                <div className="text-[10px] text-gray-400 mt-0.5 font-medium">{item.set} {item.cardNumber ? `#${item.cardNumber}` : ''}</div>
-                              </td>
-                              <td className="px-5 py-3 font-sans whitespace-nowrap">
-                                <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                                  item.category === 'Raw Card'
-                                    ? 'bg-blue-500/10 border border-blue-500/10 text-blue-600'
-                                    : 'bg-purple-500/10 border border-purple-500/10 text-purple-600'
+                          exposureEvents.map((evt, idx) => {
+                            const isAdded = evt.impact > 0;
+                            return (
+                              <tr key={`${evt.id}-${idx}`} className="hover:bg-gray-50/50 transition-colors">
+                                <td className="px-5 py-3 text-gray-650 font-sans">
+                                  {formatDate(evt.date)}
+                                </td>
+                                <td className="px-5 py-3 font-sans whitespace-nowrap">
+                                  <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                                    isAdded 
+                                      ? 'bg-rose-500/10 border border-rose-500/20 text-red-600'
+                                      : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600'
+                                  }`}>
+                                    {evt.type}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-3 text-gray-800 font-sans font-medium break-words max-w-sm whitespace-normal leading-relaxed">
+                                  {evt.itemDNA}
+                                </td>
+                                <td className={`px-5 py-3 text-right font-extrabold text-sm whitespace-nowrap ${
+                                  isAdded ? 'text-red-600' : 'text-emerald-600'
                                 }`}>
-                                  {item.category} • {item.condition}
-                                </span>
-                              </td>
-                              <td className="px-5 py-3 text-center text-gray-900 font-bold text-sm">{item.quantity}</td>
-                              <td className="px-5 py-3 text-right text-gray-500">{formatIDR(item.costBasis)}</td>
-                              <td className="px-5 py-3 text-right font-bold text-gray-800">{formatIDR(item.costBasis * item.quantity)}</td>
-                            </tr>
-                          ))
+                                  {isAdded ? `+ ${formatIDR(evt.impact)}` : `- ${formatIDR(Math.abs(evt.impact))}`}
+                                </td>
+                              </tr>
+                            );
+                          })
                         )}
                       </tbody>
                     </table>
@@ -673,6 +900,133 @@ export function Dashboard({
                   className="px-6 py-2 text-xs font-bold bg-[#961b2b] text-gray-100 rounded-lg hover:bg-[#961b2b]/95 shadow transition-all duration-150 min-h-[40px]"
                 >
                   Close Ledger
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 4. Procurement History Ledger Modal */}
+      {activeLedgerModal === 'procurement' && (() => {
+        const allProcurements = [...inventory].sort((a, b) => {
+          const d1 = a.dateAdded ? (typeof a.dateAdded.toDate === 'function' ? a.dateAdded.toDate() : new Date(a.dateAdded)) : new Date(0);
+          const d2 = b.dateAdded ? (typeof b.dateAdded.toDate === 'function' ? b.dateAdded.toDate() : new Date(b.dateAdded)) : new Date(0);
+          return d2.getTime() - d1.getTime();
+        });
+
+        const totalAllTimeDepl = inventory.reduce((sum, item) => {
+          const qty = item.quantity > 0 ? item.quantity : 1;
+          return sum + ((item.costBasis || 0) * qty);
+        }, 0);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div 
+              className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm transition-opacity"
+              onClick={() => setActiveLedgerModal(null)}
+            />
+            <div className="relative bg-white border border-gray-200 rounded-[16px] shadow-2xl w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="p-5 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                    <History className="text-[#961b2b]" size={20} />
+                    All-Time Procurement History Ledger
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-1">Complete chronological breakdown of all-time deployed capital across catalog lots (both Active and Sold).</p>
+                </div>
+                <button 
+                  onClick={() => setActiveLedgerModal(null)}
+                  className="p-1.5 hover:bg-gray-200 rounded-lg text-gray-500 hover:text-gray-800 transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              
+              {/* Modal Body */}
+              <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                {/* Summary Stats Header */}
+                <div className="bg-amber-500/5 border border-amber-500/15 rounded-xl p-4 flex justify-between items-center font-mono">
+                  <div>
+                    <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Total All-Time Deployed Capital</span>
+                    <span className="text-2xl font-extrabold text-[#961b2b]">{formatIDR(totalAllTimeDepl)}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Total Acquired Lots</span>
+                    <span className="text-base font-bold text-gray-700">{allProcurements.length} Card Batches</span>
+                  </div>
+                </div>
+
+                {/* Ledger list */}
+                <div className="border border-gray-200 rounded-xl overflow-hidden font-sans">
+                  <div className="overflow-x-auto max-h-[45vh]">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
+                      <thead className="bg-gray-50 text-gray-500 border-b border-gray-200 sticky top-0 z-10">
+                        <tr>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Date Procured</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Item DNA (Name/Set)</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Cost Basis</th>
+                          <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-center font-sans">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 font-mono text-gray-705 text-[11px]">
+                        {allProcurements.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="px-5 py-8 text-center text-gray-500 font-sans">
+                              No procurements recorded yet. Add inventory items to begin!
+                            </td>
+                          </tr>
+                        ) : (
+                          allProcurements.map((item, idx) => {
+                            const isSold = item.status === 'sold' || item.quantity === 0;
+                            return (
+                              <tr key={`${item.id}-${idx}`} className="hover:bg-gray-50/50 transition-colors">
+                                <td className="px-5 py-3 text-gray-600">
+                                  {formatDate(item.dateAdded || item.acquisitionDate)}
+                                </td>
+                                <td className="px-5 py-3 text-gray-850 font-sans min-w-[150px]">
+                                  <div className="font-bold leading-tight text-sm text-gray-900 break-words line-clamp-1 whitespace-normal">
+                                    {item.name}
+                                  </div>
+                                  <div className="text-[10px] text-gray-400 mt-0.5 font-medium leading-none">
+                                    {item.set} {item.cardNumber ? `#${item.cardNumber}` : ''} • {item.condition} ({item.foilType || 'Non-Foil'})
+                                  </div>
+                                </td>
+                                <td className="px-5 py-3 text-right font-bold text-gray-850 text-sm">
+                                  {formatIDR((item.costBasis || 0) * (item.quantity || 1))}
+                                  <span className="block text-[10px] text-gray-400 font-medium font-sans">
+                                    {formatIDR(item.costBasis)} × {item.quantity || 1}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-3 text-center">
+                                  {isSold ? (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-bold tracking-wide bg-gray-100 text-gray-400 uppercase border border-gray-200 font-sans">
+                                      Sold
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-bold tracking-wide bg-emerald-50 text-emerald-600 uppercase border border-emerald-500/20 font-sans">
+                                      Active
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
+                <button
+                  onClick={() => setActiveLedgerModal(null)}
+                  className="px-6 py-2 text-xs font-bold bg-[#961b2b] text-gray-100 rounded-lg hover:bg-[#961b2b]/95 shadow transition-all duration-150 min-h-[40px]"
+                >
+                  Close History
                 </button>
               </div>
             </div>

@@ -19,7 +19,7 @@ import { BarcodeScanner } from './components/BarcodeScanner';
 import { useFirebase } from './contexts/FirebaseContext';
 import { LoginGate } from './components/LoginGate';
 import { db } from './firebase';
-import { collection, onSnapshot, doc, getDocs, deleteDoc, query, orderBy, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, getDocs, deleteDoc, query, orderBy, addDoc, setDoc, where, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { firestoreService } from './utils/firestoreService';
 import { handleFirestoreError, OperationType } from './utils/firebaseUtils';
 import { Loader2 } from 'lucide-react';
@@ -49,6 +49,8 @@ export interface InventoryItem {
   language?: string;
   batches?: InventoryBatch[];
   acquisitionDate?: string;
+  status?: string;
+  dateAdded?: any;
 }
 
 export interface ProcurementRecord {
@@ -167,12 +169,12 @@ export default function App() {
     });
 
     // 1. Inventory Items subscription
-    const q = query(collection(db, "inventory"));
+    const q = query(collection(db, "users", user.uid, "inventory"));
     const unsubscribeInventory = onSnapshot(q, (snapshot) => {
-      const itemsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+      const itemsData = snapshot.docs.map(doc => ({ ...doc.data() as any, id: doc.id }));
       setInventoryItems(itemsData); // Update state purely from the cloud
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "inventory");
+      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/inventory`);
     });
 
     // 2. Transactions subscription
@@ -364,7 +366,30 @@ export default function App() {
   };
 
   const handleSaveItem = async (newItemData: InventoryItem) => {
-    await addDoc(collection(db, "inventory"), { ...newItemData, dateAdded: new Date() });
+    // 1. Save to inventory
+    const docId = newItemData.id || `INV-${Date.now()}`;
+    const userUid = user?.uid || "admin_test_user";
+    await setDoc(doc(db, "users", userUid, "inventory", docId), { ...newItemData, id: docId, status: "active", dateAdded: new Date() });
+
+    // 2. Write to master_catalog
+    const { name, set, category, foilType, rarity, condition, cardNumber } = newItemData;
+    if (name && set) {
+      // Create a deterministic unique ID based on Name + Set + CardNumber (optional)
+      const uniqueId = (name.replace(/\s+/g, '_') + '_' + set.replace(/\s+/g, '_') + (cardNumber ? '_' + cardNumber : '')).toLowerCase();
+      
+      const catalogEntry = {
+        name,
+        set,
+        category: category || 'Single',
+        foilType: foilType || 'Non-Foil',
+        rarity: rarity || 'N/A',
+        condition: condition || 'NM',
+        cardNumber: cardNumber || '',
+        updatedAt: new Date()
+      };
+
+      await setDoc(doc(db, "master_catalog", uniqueId), catalogEntry, { merge: true });
+    }
   };
 
   const handleUpdateItem = (updatedItem: InventoryItem) => {
@@ -391,7 +416,7 @@ export default function App() {
           let remainingToDeduct = update.quantityToDeduct;
           const oldBatches = item.batches && item.batches.length > 0 
             ? [...item.batches] 
-            : [{ batchId: `BCH-LEGACY-${item.id}`, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
+            : [{ batchId: 'BCH-LEGACY-' + item.id, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
           
           const newBatches: InventoryBatch[] = [];
           for (const batch of oldBatches) {
@@ -427,7 +452,7 @@ export default function App() {
           let remainingToDeduct = update.quantityToDeduct;
           const oldBatches = item.batches && item.batches.length > 0 
             ? [...item.batches] 
-            : [{ batchId: `BCH-LEGACY-${item.id}`, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
+            : [{ batchId: 'BCH-LEGACY-' + item.id, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
           
           const newBatches: InventoryBatch[] = [];
           for (const batch of oldBatches) {
@@ -482,22 +507,64 @@ export default function App() {
     }
   };
 
-  const handleAddTransaction = (transaction: any) => {
+  const handleAddTransaction = async (transaction: any) => {
     if (user) {
-      firestoreService.saveTransaction(user.uid, transaction);
-      const netCashAdded = transaction.total - (transaction.platform_fee || 0) - (transaction.shipping_cost || 0);
-      firestoreService.saveSettings(user.uid, {
-        storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
-        currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
-        defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
-        defaultShipping: localStorage.getItem('bandit_def_shipping') || '0',
-        outOfPocketCapital,
-        cashReserve: cashReserve + netCashAdded
-      });
+      try {
+        const batch = writeBatch(db);
+        
+        // 1. Transaction save
+        const trxId = transaction.id || `TRX-${Date.now()}`;
+        const transactionToSave = {
+          id: trxId,
+          date: transaction.date || '',
+          channel: transaction.channel || 'In-Store POS',
+          total: typeof transaction.total === 'number' ? transaction.total : 0,
+          cost: typeof transaction.cost === 'number' ? transaction.cost : 0,
+          platform_fee: typeof transaction.platform_fee === 'number' ? transaction.platform_fee : 0,
+          shipping_cost: typeof transaction.shipping_cost === 'number' ? transaction.shipping_cost : 0,
+          status: transaction.status || 'Completed',
+          items: transaction.items || []
+        };
+        const trxRef = doc(db, `users/${user.uid}/transactions/${trxId}`);
+        batch.set(trxRef, { ...transactionToSave, createdAt: serverTimestamp() });
+        
+        // 2. Mark specific items as sold
+        if (transaction.items && transaction.items.length > 0) {
+          transaction.items.forEach((item: any) => {
+            const itemRef = doc(db, "users", user.uid, "inventory", item.id);
+            batch.update(itemRef, { 
+              status: "sold", 
+              soldAt: serverTimestamp() 
+            });
+          });
+        }
+        
+        // 3. Update cash reserve settings
+        const netCashAdded = transactionToSave.total - transactionToSave.platform_fee - transactionToSave.shipping_cost;
+        const settingsToUpdate = {
+          storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
+          currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
+          defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
+          defaultShipping: localStorage.getItem('bandit_def_shipping') || '0',
+          outOfPocketCapital,
+          cashReserve: cashReserve + netCashAdded
+        };
+        const settingsRef = doc(db, `users/${user.uid}/settings/store`);
+        batch.set(settingsRef, settingsToUpdate, { merge: true });
+        
+        // Commit the batch
+        await batch.commit();
+
+      } catch (err) {
+        console.error("Failed to commit batch transaction:", err);
+      }
     } else {
       setTransactions(prev => [transaction, ...prev]);
       const netCashAdded = transaction.total - (transaction.platform_fee || 0) - (transaction.shipping_cost || 0);
       setCashReserve(prev => prev + netCashAdded);
+      // Local updates
+      const soldIds = transaction.items?.map((i: any) => i.id) || [];
+      setInventoryItems(prev => prev.filter(item => !soldIds.includes(item.id)));
     }
   };
 

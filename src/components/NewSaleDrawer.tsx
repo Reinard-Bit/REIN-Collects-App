@@ -87,12 +87,12 @@ export function NewSaleDrawer({
 
   const filteredInventory = searchQuery 
     ? inventory.filter(item => 
-        item.quantity > 0 &&
+        item.status === 'active' && item.quantity > 0 &&
         (item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
         item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (item.cardNumber && item.cardNumber.toLowerCase().includes(searchQuery.toLowerCase())))
       )
-    : inventory.filter(item => item.quantity > 0);
+    : inventory.filter(item => item.status === 'active' && item.quantity > 0);
 
   const addToCart = (item: any) => {
     setErrorMsg('');
@@ -150,7 +150,6 @@ export function NewSaleDrawer({
     };
 
     onAddTransaction(transaction);
-    onUpdateInventory(cart.map(c => ({ id: c.id, quantityToDeduct: c.quantity })));
     
     setCart([]);
     setPlatformFee(0);

@@ -156,5 +156,11 @@ service cloud.firestore {
         allow delete: if isOwner(userId) && isVerifiedUser();
       }
     }
+
+    // Global master_catalog collection route
+    match /master_catalog/{catalogId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(catalogId) && isValidCatalogItem(incoming());
+    }
   }
 }

@@ -105,7 +105,6 @@ export function Transactions({ inventory, transactions, onAddTransaction, onUpda
     };
 
     onAddTransaction(transaction);
-    onUpdateInventory(cart.map(c => ({ id: c.id, quantityToDeduct: c.quantity })));
     
     setIsNewSaleOpen(false);
     setCart([]);

@@ -24,6 +24,7 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
   const [stockModalItem, setStockModalItem] = useState<InventoryItem | null>(null);
   const [editModalItem, setEditModalItem] = useState<InventoryItem | null>(null);
   const [expandedRowIds, setExpandedRowIds] = useState<string[]>([]);
+  const [hideSoldOut, setHideSoldOut] = useState(false);
   
   const toggleRow = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -90,6 +91,38 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
     return matchesCategory && matchesSearch;
   });
 
+  const groupedItems = Object.values(filteredItems.reduce((acc, item) => {
+    // Group by Card DNA
+    const nameKey = item.name ? item.name.trim().toLowerCase() : '';
+    const setKey = item.set ? item.set.trim().toLowerCase() : '';
+    const key = `${nameKey}_${setKey}_${item.condition}_${item.foilType}_${item.category}`;
+    if (!acc[key]) {
+      acc[key] = {
+        ...item,
+        quantity: 0, // We will rebuild the total stock
+        underlyingIds: [],
+        soldIds: [],
+        totalCostBasis: 0
+      };
+    }
+    
+    if (item.status === 'active') {
+      const qty = item.quantity || 1;
+      acc[key].totalCostBasis += (item.costBasis || 0) * qty;
+      acc[key].quantity += qty;
+      acc[key].underlyingIds.push(item.id);
+    } else if (item.status === 'sold') {
+      acc[key].soldIds.push(item.id);
+    }
+    
+    return acc;
+  }, {} as Record<string, any>)).map(group => ({
+    ...group,
+    costBasis: group.quantity > 0 ? group.totalCostBasis / group.quantity : 0
+  }));
+
+  const displayItems = hideSoldOut ? groupedItems.filter(item => item.quantity > 0) : groupedItems;
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Header & Actions */}
@@ -146,6 +179,18 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
               {cat}
             </button>
           ))}
+          
+          <div className="h-4 w-px bg-gray-200 mx-2 hidden sm:block"></div>
+          
+          <label className="flex items-center gap-2 cursor-pointer ml-2">
+            <input 
+              type="checkbox" 
+              checked={hideSoldOut} 
+              onChange={(e) => setHideSoldOut(e.target.checked)} 
+              className="rounded border-gray-300 text-[#961b2b] focus:ring-[#961b2b] transition-colors"
+            />
+            <span className="text-xs font-medium text-gray-600">Hide Sold Out</span>
+          </label>
         </div>
 
         <div className="h-4 w-px bg-gray-200 mx-2 hidden sm:block"></div>
@@ -177,10 +222,10 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 md:table-row-group block w-full">
-              {filteredItems.map((item) => (
+              {displayItems.map((item) => (
                 <React.Fragment key={item.id}>
                   {/* Desktop view */}
-                  <tr className="hidden md:table-row group hover:bg-white/[0.02] transition-colors border-b border-gray-100">
+                  <tr className={`hidden md:table-row group ${item.quantity === 0 ? 'opacity-50 grayscale bg-gray-50/50' : 'hover:bg-white/[0.02]'} transition-colors border-b border-gray-100`}>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-4">
                         <div className="relative w-10 h-14 rounded overflow-hidden bg-[#1a1a1c] border border-gray-200 flex-shrink-0 group/img">
@@ -210,7 +255,7 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                               </button>
                             )}
                           </div>
-                          <div className="text-xs text-gray-500 mt-1">{item.set} • <span className="font-mono">{item.id}</span></div>
+                          <div className="text-xs text-gray-500 mt-1">{item.set} • <span className="font-mono" title={item.underlyingIds.join(", ")}>{item.underlyingIds.length > 1 ? `Multiple Serials (${item.underlyingIds.length})` : item.id}</span></div>
                         </div>
                       </div>
                     </td>
@@ -241,9 +286,15 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <span className={`font-mono font-medium ${item.quantity < 3 ? 'text-[#961b2b]' : 'text-gray-700'}`}>
-                        {item.quantity}
-                      </span>
+                      {item.quantity === 0 ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide bg-gray-200 text-gray-500 uppercase">
+                          Sold Out
+                        </span>
+                      ) : (
+                        <span className={`font-mono font-medium ${item.quantity < 3 ? 'text-[#961b2b]' : 'text-gray-700'}`}>
+                          {item.quantity}
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex flex-col items-end">
@@ -258,8 +309,9 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                       <div className="flex items-center justify-center gap-1">
                         <button 
                           onClick={() => setStockModalItem(item)}
-                          className="p-2 text-gray-500 hover:text-[#961b2b] hover:bg-[#961b2b]/10 rounded-lg transition-colors"
-                          title="Quick Adjust Stock"
+                          disabled={item.quantity === 0}
+                          className={`p-2 rounded-lg transition-colors ${item.quantity === 0 ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:text-[#961b2b] hover:bg-[#961b2b]/10'}`}
+                          title={item.quantity === 0 ? "Cannot adjust sold out stock here" : "Quick Adjust Stock"}
                         >
                           <QrCodeIcon size={16} />
                         </button>
@@ -293,9 +345,10 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                               </button>
                               <button 
                                 onClick={() => { setActiveMenuId(null); setStockModalItem(item); }}
-                                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-[#f2f2f2] transition-colors whitespace-nowrap"
+                                disabled={item.quantity === 0}
+                                className={`w-full text-left px-4 py-2.5 text-sm whitespace-nowrap transition-colors ${item.quantity === 0 ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700 hover:bg-[#f2f2f2]'}`}
                               >
-                                Adjust Stock Level
+                                {item.quantity === 0 ? 'Stock Locked (Sold)' : 'Adjust Stock Level'}
                               </button>
                               <div className="my-1 border-t border-gray-100" />
                               <button 
@@ -342,7 +395,7 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                   )}
 
                   {/* Mobile Card Stack Item */}
-                  <tr className="md:hidden block w-full border-b border-gray-100 last:border-0 hover:bg-gray-50/20 transition-colors">
+                  <tr className={`md:hidden block w-full border-b border-gray-100 last:border-0 ${item.quantity === 0 ? 'opacity-60 grayscale bg-gray-50/30' : 'hover:bg-gray-50/20'} transition-colors`}>
                     <td className="block p-4 border-none bg-transparent w-full">
                       <div className="flex flex-col gap-3">
                         {/* Header: Img, Title, Options */}
@@ -365,7 +418,7 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                             <div className="space-y-0.5">
                               <div className="font-bold text-gray-900 text-sm leading-snug break-words whitespace-normal">{item.name}</div>
                               <div className="text-[11px] text-gray-500">
-                                {item.set} • <span className="font-mono text-gray-400">{item.id}</span>
+                                {item.set} • <span className="font-mono text-gray-400" title={item.underlyingIds.join(", ")}>{item.underlyingIds.length > 1 ? `Multiple Serials (${item.underlyingIds.length})` : item.id}</span>
                               </div>
                             </div>
                           </div>
@@ -401,9 +454,10 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                                 </button>
                                 <button 
                                   onClick={() => { setActiveMenuId(null); setStockModalItem(item); }}
-                                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-[#f2f2f2] transition-colors whitespace-nowrap"
+                                  disabled={item.quantity === 0}
+                                  className={`w-full text-left px-4 py-2.5 text-sm whitespace-nowrap transition-colors ${item.quantity === 0 ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700 hover:bg-[#f2f2f2]'}`}
                                 >
-                                  Adjust Stock Level
+                                  {item.quantity === 0 ? 'Stock Locked (Sold)' : 'Adjust Stock Level'}
                                 </button>
                                 <div className="my-1 border-t border-gray-100" />
                                 <button 
@@ -439,9 +493,13 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
                         <div className="grid grid-cols-3 gap-2.5 bg-gray-50 rounded-xl p-3 border border-gray-100 text-xs">
                           <div>
                             <span className="text-gray-400 block mb-0.5 uppercase tracking-wider text-[9px] font-semibold">Stock level</span>
-                            <span className={`font-mono font-bold ${item.quantity < 3 ? 'text-[#961b2b]' : 'text-gray-800'}`}>
-                              {item.quantity} units
-                            </span>
+                            {item.quantity === 0 ? (
+                              <span className="font-bold tracking-wide text-gray-500 uppercase text-[10px] bg-gray-200 px-1.5 py-0.5 rounded">Sold Out</span>
+                            ) : (
+                              <span className={`font-mono font-bold ${item.quantity < 3 ? 'text-[#961b2b]' : 'text-gray-800'}`}>
+                                {item.quantity} units
+                              </span>
+                            )}
                           </div>
                           <div>
                             <span className="text-gray-400 block mb-0.5 uppercase tracking-wider text-[9px] font-semibold">Cost Basis</span>
@@ -494,7 +552,7 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
         {/* Pagination */}
         <div className="p-4 border-t border-gray-200 flex items-center justify-between bg-[#f2f2f2]/30">
           <span className="text-xs text-gray-500">
-            Showing <span className="font-medium text-gray-700">1</span> to <span className="font-medium text-gray-700">{Math.min(8, filteredItems.length)}</span> of <span className="font-medium text-gray-700">{filteredItems.length}</span> items
+            Showing <span className="font-medium text-gray-700">1</span> to <span className="font-medium text-gray-700">{Math.min(8, groupedItems.length)}</span> of <span className="font-medium text-gray-700">{groupedItems.length}</span> items
           </span>
           <div className="flex items-center gap-1">
             <button className="p-1.5 rounded-md border border-gray-200 text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
@@ -632,7 +690,7 @@ function StockAdjustModal({ item, onClose, onSave }: { item: InventoryItem; onCl
     let remainingToDeduct = 1;
     const oldBatches = item.batches && item.batches.length > 0 
       ? [...item.batches] 
-      : [{ batchId: `BCH-LEGACY-${item.id}`, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
+      : [{ batchId: 'BCH-LEGACY-' + item.id, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
     
     const newBatches = [];
     for (const batch of oldBatches) {
@@ -676,7 +734,7 @@ function StockAdjustModal({ item, onClose, onSave }: { item: InventoryItem; onCl
 
     const oldBatches = item.batches && item.batches.length > 0 
       ? [...item.batches] 
-      : [{ batchId: `BCH-LEGACY-${item.id}`, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
+      : [{ batchId: 'BCH-LEGACY-' + item.id, date: 'Legacy', qty: item.quantity, costBasis: item.costBasis }];
 
     const newBatches = [...oldBatches, newBatch];
     const newQuantity = item.quantity + 1;
