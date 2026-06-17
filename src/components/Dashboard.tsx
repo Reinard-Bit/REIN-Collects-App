@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { formatIDR } from '../utils/currency';
 import { collection, onSnapshot, query, where, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, ACTIVE_USER_ID } from '../firebase';
 import { useFirebase } from '../contexts/FirebaseContext';
+import { DB_PATHS } from '../utils/dbConfig';
 import { NewSaleDrawer } from './NewSaleDrawer';
 import {
   DollarSign,
@@ -65,13 +66,93 @@ export function Dashboard({
   const [activeLedgerModal, setActiveLedgerModal] = useState<'total' | 'cash' | 'active' | 'procurement' | null>(null);
   const { user } = useFirebase();
   const [totalCapital, setTotalCapital] = useState(0);
-  const [capitalAtRisk, setCapitalAtRisk] = useState(0);
+  const [activeCapitalAtRisk, setActiveCapitalAtRisk] = useState(0);
   const [exposureEvents, setExposureEvents] = useState<any[]>([]);
+  const [capitalSurplus, setCapitalSurplus] = useState(0);
+  const [cashLedgerItems, setCashLedgerItems] = useState<any[]>([]);
+  const [liquidWalletBalance, setLiquidWalletBalance] = useState(0);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
 
   useEffect(() => {
-    const userId = user?.uid || "zJr2YmhFGrWLXH6RZ4CM5hiBOD82";
-    const q = query(collection(db, "users", userId, "capital_injections"));
+    // Force reset state to prevent stale data lingering
+    setCashLedgerItems([]);
+    setLiquidWalletBalance(0);
+    const q = query(collection(db, DB_PATHS.CASH_LEDGER));
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (snapshot.empty) {
+        setCashLedgerItems([]);
+        setLiquidWalletBalance(0);
+        return;
+      }
+      const items: any[] = [];
+      let balance = 0;
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const amount = typeof data.amount === 'number' ? data.amount : parseFloat(data.amount) || 0;
+        
+        let displayDate = 'N/A';
+        if (data.date) {
+          displayDate = formatDate(data.date);
+        }
+
+        const itemFlow = data.flow || (data.impact === 'inflow' ? 'Cash In' : 'Cash Out');
+        const flowImpact = itemFlow === 'Cash In' ? 'inflow' : 'outflow';
+
+        items.push({
+          ...data,
+          id: docSnap.id,
+          trueDbId: docSnap.id,
+          displayId: data.id || docSnap.id,
+          date: displayDate,
+          rawDate: data.date,
+          flow: itemFlow,
+          description: data.sourceDescription || data.description || 'Unknown Flow',
+          amount: amount,
+          impact: flowImpact,
+          type: 'cash_ledger'
+        });
+
+        if (itemFlow === 'Cash In') {
+          balance += amount;
+        } else {
+          balance -= amount;
+        }
+      });
+
+      // Sort items chronologically descending
+      items.sort((a, b) => {
+        const timeA = a.rawDate && typeof a.rawDate.toDate === 'function' ? a.rawDate.toDate().getTime() : (a.rawDate ? new Date(a.rawDate).getTime() : 0);
+        const timeB = b.rawDate && typeof b.rawDate.toDate === 'function' ? b.rawDate.toDate().getTime() : (b.rawDate ? new Date(b.rawDate).getTime() : 0);
+        if (timeB !== timeA) return timeB - timeA;
+        return b.id.localeCompare(a.id);
+      });
+
+      setCashLedgerItems(items);
+      setLiquidWalletBalance(balance);
+    }, (error) => {
+      console.error("Error reading cash ledger:", error);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    const safeCash = Number(liquidWalletBalance || 0);
+    const safeRisk = Number(activeCapitalAtRisk || 0);
+    const safeBase = Number(totalCapital || 0);
+    const calculatedSurplus = (safeCash + safeRisk) - safeBase;
+    setCapitalSurplus(calculatedSurplus);
+  }, [liquidWalletBalance, activeCapitalAtRisk, totalCapital]);
+
+  useEffect(() => {
+    // Force reset state to prevent stale data lingering
+    setTotalCapital(0);
+    const q = query(collection(db, DB_PATHS.CAPITAL_INJECTIONS));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (snapshot.empty) {
+        setTotalCapital(0);
+        return;
+      }
       let sum = 0;
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -86,9 +167,16 @@ export function Dashboard({
   }, [user]);
 
   useEffect(() => {
-    const userId = user?.uid || "zJr2YmhFGrWLXH6RZ4CM5hiBOD82";
-    const q = query(collection(db, "users", userId, "inventory"));
+    // Force reset state to prevent stale data lingering
+    setActiveCapitalAtRisk(0);
+    setExposureEvents([]);
+    const q = query(collection(db, DB_PATHS.INVENTORY));
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (snapshot.empty) {
+        setActiveCapitalAtRisk(0);
+        setExposureEvents([]);
+        return;
+      }
       let totalInventoryCost = 0;
       const events: any[] = [];
 
@@ -96,8 +184,8 @@ export function Dashboard({
         const item = docSnap.data();
         const costBasisVal = typeof item.costBasis === 'number' ? item.costBasis : parseFloat(item.costBasis) || 0;
 
-        // Keep the total stock cost basis exposure calculation based ONLY on items where status === "active"
-        if (item.status === "active") {
+        // Keep the total stock cost basis exposure calculation based ONLY on items where status === "In Stock"
+        if (item.status === "In Stock") {
           const quantity = typeof item.quantity === 'number' 
             ? item.quantity 
             : (item.quantity !== undefined ? parseFloat(item.quantity) || 1 : 1);
@@ -117,8 +205,8 @@ export function Dashboard({
           impact: costBasisVal
         });
 
-        // Rule B: If an item has status === "sold", push a SECOND event object into the array.
-        if (item.status === "sold") {
+        // Rule B: If an item has status === "Sold", push a SECOND event object into the array.
+        if (item.status === "Sold") {
           events.push({
             id: docSnap.id + '-sale',
             date: item.soldAt,
@@ -129,7 +217,7 @@ export function Dashboard({
         }
       });
 
-      setCapitalAtRisk(totalInventoryCost);
+      setActiveCapitalAtRisk(totalInventoryCost);
 
       const parseDateVal = (dateVal: any) => {
         if (!dateVal) return 0;
@@ -188,59 +276,90 @@ export function Dashboard({
     }
   };
 
-  const handleDelete = async (type: string, id: string) => {
-    if (!user) return;
-    if (window.confirm('Are you sure you want to delete this record?')) {
+  const handleDelete = async (collectionName: string, trueDbId: string) => {
+    console.log("Delete button clicked for ID:", trueDbId);
+    try {
+      const collectionPath = collectionName === 'cash_ledger' ? DB_PATHS.CASH_LEDGER : DB_PATHS.CAPITAL_INJECTIONS;
+      const targetRef = doc(db, collectionPath, trueDbId);
+      console.log("🚨 Target DB Path:", targetRef.path);
+      await deleteDoc(targetRef);
+      console.log("🚀 Delete success for path:", targetRef.path);
+    } catch (error) {
+      console.error("❌ Delete failed for path:", collectionName, trueDbId, error);
+    }
+  };
+
+  const handleDeleteInjection = async (id: string) => {
+    if (window.confirm("Are you sure you want to delete this capital injection? This will permanently lower your Total Base Investment.")) {
       try {
-        let collectionName = '';
-        if (type === 'injection') collectionName = 'capital_injections';
-        else if (type === 'sale') collectionName = 'transactions';
-        else if (type === 'procurement') collectionName = 'procurements';
-        
-        if (collectionName) {
-          await deleteDoc(doc(db, `users/${user.uid}/${collectionName}`, id));
+        const deletedInj = capitalInjections.find((i: any) => i.trueDbId === id || i.id === id);
+        if (deletedInj) {
+          const deletedAmount = deletedInj.amount || deletedInj.injectedAmount || 0;
+          
+          const settingsRef = doc(db, DB_PATHS.SETTINGS);
+          await updateDoc(settingsRef, {
+            outOfPocketCapital: outOfPocketCapital - deletedAmount,
+            cashReserve: cashReserve - deletedAmount
+          });
         }
+
+        const targetRef = doc(db, DB_PATHS.CAPITAL_INJECTIONS, id);
+        await deleteDoc(targetRef);
       } catch (error) {
-        console.error('Error deleting record:', error);
+        console.error("Error deleting injection:", error);
       }
     }
   };
 
-  const handleEdit = async (type: string, id: string, currentAmount: number) => {
-    if (!user) return;
-    const newValue = window.prompt('Enter new amount (IDR):', currentAmount.toString());
-    if (newValue !== null && !isNaN(parseFloat(newValue))) {
-      try {
-        const numValue = parseFloat(newValue);
-        let collectionName = '';
-        let updateData: any = {};
+  const handleEditInjection = (item: any) => {
+    setEditingId(item.id);
+    setEditValue(String(item.amount || item.injectedAmount || ""));
+  };
+
+  const handleEdit = (collectionName: string, item: any) => {
+    console.log("Edit button clicked for item:", item);
+    setEditingId(item.id);
+    setEditValue(String(item.amount || item.injectedAmount || ""));
+  };
+
+  const submitEdit = async (collectionName: string, trueDbId: string) => {
+    try {
+      const collectionPath = collectionName === 'cash_ledger' ? DB_PATHS.CASH_LEDGER : DB_PATHS.CAPITAL_INJECTIONS;
+      const targetRef = doc(db, collectionPath, trueDbId);
+      console.log("🚨 Target DB Path:", targetRef.path);
+      
+      const updateData: any = { amount: Number(editValue) };
+      if (collectionName === 'capital_injections') {
+        updateData.injectedAmount = Number(editValue);
         
-        if (type === 'injection') {
-          collectionName = 'capital_injections';
-          updateData = { amount: numValue };
-        } else if (type === 'sale') {
-          collectionName = 'transactions';
-          updateData = { total: numValue };
-        } else if (type === 'procurement') {
-          collectionName = 'procurements';
-          updateData = { totalCost: numValue };
+        const inj = capitalInjections.find((i: any) => i.trueDbId === trueDbId || i.id === trueDbId);
+        if (inj) {
+          const oldAmount = inj.amount || inj.injectedAmount || 0;
+          const newAmount = Number(editValue);
+          const difference = newAmount - oldAmount;
+          
+          if (difference !== 0) {
+            const settingsRef = doc(db, DB_PATHS.SETTINGS);
+            await updateDoc(settingsRef, {
+              outOfPocketCapital: outOfPocketCapital + difference,
+              cashReserve: cashReserve + difference
+            });
+            console.log("🚀 Automatically recalculated Out of Pocket Capital for edit. Difference:", difference);
+          }
         }
-        
-        if (collectionName) {
-          await updateDoc(doc(db, `users/${user.uid}/${collectionName}`, id), updateData);
-        }
-      } catch (error) {
-        console.error('Error updating record:', error);
       }
+      
+      await updateDoc(targetRef, updateData);
+      console.log("🚀 Edit success for path:", targetRef.path);
+      setEditingId(null);
+      setEditValue("");
+    } catch (error) {
+      console.error("❌ Edit failed for path:", collectionName, trueDbId, error);
     }
   };
 
   const totalRealizedProfits = transactions.reduce((sum, trx) => sum + (trx.total - trx.cost - trx.platform_fee - trx.shipping_cost), 0);
-  const activeInventoryValue = inventory.filter(i => i.status === 'active').reduce((sum, item) => sum + ((item.currentPrice || 0) * item.quantity), 0);
-
-  const smartFlipLabel = cashReserve > outOfPocketCapital ? 'Capital Surplus' : 'Active Capital at Risk';
-  const smartFlipValue = cashReserve > outOfPocketCapital ? cashReserve - outOfPocketCapital : capitalAtRisk;
-  const isSurplus = cashReserve > outOfPocketCapital;
+  const activeInventoryValue = inventory.filter(i => i.status === 'In Stock').reduce((sum, item) => sum + ((item.currentPrice || 0) * item.quantity), 0);
 
   // Chronological cash reserve movements helper
   const sortedCashMovements = (() => {
@@ -404,20 +523,20 @@ export function Dashboard({
         />
         <MetricCard
           title="Cash Reserve (Wallet)"
-          value={formatIDR(totalCapital)}
-          trend={totalCapital >= totalCapital ? 'Profitable' : 'Deficit'}
-          isPositive={totalCapital >= totalCapital}
+          value={formatIDR(liquidWalletBalance)}
+          trend={liquidWalletBalance >= totalCapital ? 'Profitable' : 'Deficit'}
+          isPositive={liquidWalletBalance >= totalCapital}
           icon={<TrendingUp className="text-[#961b2b]" size={20} />}
           onClick={() => setActiveLedgerModal('cash')}
         />
         <MetricCard
-          title={smartFlipLabel}
-          value={formatIDR(smartFlipValue)}
-          trend={isSurplus ? 'Net Profit' : 'Exposure'}
-          isPositive={isSurplus ? true : false}
-          icon={<PackageOpen className={isSurplus ? "text-emerald-600" : "text-[#961b2b]"} size={20} />}
-          highlight={isSurplus}
-          valueColor={isSurplus ? "text-[#2e7d32]" : "text-gray-900"}
+          title="Active Capital at Risk"
+          value={formatIDR(activeCapitalAtRisk)}
+          trend="Exposure"
+          isPositive={false}
+          icon={<PackageOpen className="text-[#961b2b]" size={20} />}
+          highlight={false}
+          valueColor="text-gray-900"
           onClick={() => setActiveLedgerModal('active')}
         />
       </div>
@@ -609,60 +728,83 @@ export function Dashboard({
               </div>
 
               {/* Ledger list */}
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs whitespace-nowrap">
-                    <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
-                      <tr>
-                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Date of Injection</th>
-                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Movement Type</th>
-                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider">Reference ID</th>
-                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Injected Amount</th>
-                        <th className="px-5 py-3 font-semibold text-[10px] uppercase tracking-wider text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 font-mono text-gray-705">
-                      {capitalInjections.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="px-5 py-8 text-center text-gray-500 font-sans">
-                            No manual capital injections recorded yet. Use "Inject Capital" to fund operations.
-                          </td>
-                        </tr>
-                      ) : (
-                        capitalInjections.map((inj) => (
-                          <tr key={inj.id} className="hover:bg-gray-50/50 transition-colors">
-                            <td className="px-5 py-3 text-gray-600 font-sans">{inj.date}</td>
-                            <td className="px-5 py-3 font-sans">
-                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/10 border border-emerald-500/25 text-emerald-600">
-                                Capital In
-                              </span>
-                            </td>
-                            <td className="px-5 py-3 text-gray-400 text-[11px]">{inj.id}</td>
-                            <td className="px-5 py-3 text-right text-emerald-600 font-bold">{formatIDR(inj.amount)}</td>
-                            <td className="px-5 py-3 text-right">
-                              <div className="flex items-center justify-end gap-2">
-                                <button 
-                                  onClick={() => handleEdit('injection', inj.id, inj.amount)}
-                                  className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-blue-600 transition-colors"
-                                  title="Edit"
-                                >
-                                  <Edit2 size={14} />
-                                </button>
-                                <button 
-                                  onClick={() => handleDelete('injection', inj.id)}
-                                  className="p-1 hover:bg-red-50 rounded text-gray-500 hover:text-red-600 transition-colors"
-                                  title="Delete"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="space-y-0">
+                {capitalInjections.length === 0 ? (
+                  <div className="py-8 text-center text-gray-500 text-sm">
+                    No manual capital injections recorded yet. Use "Inject Capital" to fund operations.
+                  </div>
+                ) : (
+                  capitalInjections.map((inj) => (
+                    <div key={inj.id} className="group flex flex-col sm:flex-row sm:items-center justify-between py-4 border-b border-gray-100 transition-colors hover:bg-gray-50/30 px-2 -mx-2 rounded-lg">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-gray-900">{inj.date}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-600">
+                            Capital In
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-400 font-mono">ID: {inj.id}</span>
+                      </div>
+                      
+                      <div className="mt-3 sm:mt-0 flex items-center justify-between sm:justify-end gap-6">
+                        <div className="text-right">
+                          {editingId === inj.id ? (
+                            <input 
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              className="border border-gray-200 rounded px-2 py-1 text-right w-32 font-mono text-xs focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-gray-800"
+                              onClick={(e) => e.stopPropagation()}
+                              autoFocus
+                            />
+                          ) : (
+                            <span className="text-base font-bold text-gray-900">{formatIDR(inj.amount)}</span>
+                          )}
+                        </div>
+                        
+                        <div className="flex items-center justify-end gap-1 min-w-[70px]">
+                          {editingId === inj.id ? (
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <button 
+                                type="button"
+                                onClick={() => submitEdit('capital_injections', inj.trueDbId)}
+                                className="px-2 py-1 text-[10px] font-medium bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-colors"
+                              >
+                                Save
+                              </button>
+                              <button 
+                                type="button"
+                                onClick={() => { setEditingId(null); setEditValue(""); }}
+                                className="px-2 py-1 text-[10px] font-medium bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-3 text-gray-400">
+                              <button 
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleEditInjection(inj); }}
+                                className="hover:text-blue-600 transition-colors"
+                                title="Edit"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button 
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteInjection(inj.trueDbId || inj.id); }}
+                                className="hover:text-red-600 transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
@@ -701,19 +843,19 @@ export function Dashboard({
               </button>
             </div>
             
-            {/* Modal Body */}
+             {/* Modal Body */}
             <div className="p-6 overflow-y-auto space-y-6 flex-1">
               {/* Summary stats */}
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex justify-between items-center font-mono">
                 <div>
                   <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Active Liquid Wallet Balance</span>
-                  <span className={`text-2xl font-extrabold ${totalCapital >= 0 ? 'text-[#961b2b]' : 'text-red-600'}`}>
-                    {formatIDR(totalCapital)}
+                  <span className={`text-2xl font-extrabold ${liquidWalletBalance >= 0 ? 'text-[#961b2b]' : 'text-red-600'}`}>
+                    {formatIDR(liquidWalletBalance)}
                   </span>
                 </div>
                 <div className="text-right">
                   <span className="text-[11px] text-gray-500 uppercase tracking-wider block font-semibold">Journal Entries</span>
-                  <span className="text-base font-bold text-gray-700">{sortedCashMovements.length} Records</span>
+                  <span className="text-base font-bold text-gray-700">{cashLedgerItems.length} Records</span>
                 </div>
               </div>
 
@@ -731,14 +873,14 @@ export function Dashboard({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 font-mono text-gray-705">
-                      {sortedCashMovements.length === 0 ? (
+                      {cashLedgerItems.length === 0 ? (
                         <tr>
                           <td colSpan={5} className="px-5 py-8 text-center text-gray-500 font-sans">
                             No cash reserve movements registered in the wallet ledger yet.
                           </td>
                         </tr>
                       ) : (
-                        sortedCashMovements.map((move, hIdx) => (
+                        cashLedgerItems.map((move, hIdx) => (
                           <tr key={`${move.id}-${hIdx}`} className="hover:bg-gray-50/50 transition-colors">
                             <td className="px-5 py-3 text-gray-500 text-[11px] font-sans whitespace-nowrap">{move.date}</td>
                             <td className="px-5 py-3 font-sans whitespace-nowrap">
@@ -757,25 +899,64 @@ export function Dashboard({
                             <td className={`px-5 py-3 text-right font-bold whitespace-nowrap ${
                               move.impact === 'inflow' ? 'text-emerald-500' : 'text-red-500'
                             }`}>
-                              {move.impact === 'inflow' ? '+' : '-'}{formatIDR(move.amount).replace('Rp', '').trim()}
+                              {editingId === move.id ? (
+                                <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                  <span>{move.impact === 'inflow' ? '+' : '-'}</span>
+                                  <input 
+                                    type="text"
+                                    value={editValue}
+                                    onChange={(e) => setEditValue(e.target.value)}
+                                    className="border border-gray-300 rounded px-2 py-1 text-right w-36 font-mono text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 outline-none text-gray-800"
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
+                                  />
+                                </div>
+                              ) : (
+                                <>
+                                  {move.impact === 'inflow' ? '+' : '-'}{formatIDR(move.amount).replace('Rp', '').trim()}
+                                </>
+                              )}
                             </td>
-                            <td className="px-5 py-3 text-right">
-                              <div className="flex items-center justify-end gap-2">
-                                <button 
-                                  onClick={() => handleEdit(move.type, move.id, move.amount)}
-                                  className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-blue-600 transition-colors"
-                                  title="Edit"
-                                >
-                                  <Edit2 size={14} />
-                                </button>
-                                <button 
-                                  onClick={() => handleDelete(move.type, move.id)}
-                                  className="p-1 hover:bg-red-50 rounded text-gray-500 hover:text-red-600 transition-colors"
-                                  title="Delete"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
+                             <td className="px-5 py-3 text-right">
+                              {editingId === move.id ? (
+                                <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                  <button 
+                                    type="button"
+                                    onClick={() => submitEdit('cash_ledger', move.trueDbId)}
+                                    className="px-2.5 py-1 text-[11px] font-bold bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-colors cursor-pointer"
+                                    title="Save changes"
+                                  >
+                                    Save
+                                  </button>
+                                  <button 
+                                    type="button"
+                                    onClick={() => { setEditingId(null); setEditValue(""); }}
+                                    className="px-2.5 py-1 text-[11px] font-bold bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors cursor-pointer"
+                                    title="Cancel editing"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); handleEdit('cash_ledger', move); }}
+                                    className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-blue-600 transition-colors cursor-pointer"
+                                    title="Edit"
+                                  >
+                                    <Edit2 size={14} />
+                                  </button>
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); handleDelete('cash_ledger', move.trueDbId); }}
+                                    className="p-1 hover:bg-red-50 rounded text-gray-500 hover:text-red-600 transition-colors cursor-pointer"
+                                    title="Delete"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))
@@ -801,8 +982,8 @@ export function Dashboard({
 
       {/* 3. Active Capital Ledger Modal */}
       {activeLedgerModal === 'active' && (() => {
-        const unsoldItems = inventory.filter(item => item.quantity > 0 && item.status === 'active');
-        const totalActiveCost = capitalAtRisk;
+        const unsoldItems = inventory.filter(item => item.quantity > 0 && item.status === 'In Stock');
+        const totalActiveCost = activeCapitalAtRisk;
         
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -979,7 +1160,7 @@ export function Dashboard({
                           </tr>
                         ) : (
                           allProcurements.map((item, idx) => {
-                            const isSold = item.status === 'sold' || item.quantity === 0;
+                            const isSold = item.status === 'Sold' || item.quantity === 0;
                             return (
                               <tr key={`${item.id}-${idx}`} className="hover:bg-gray-50/50 transition-colors">
                                 <td className="px-5 py-3 text-gray-600">

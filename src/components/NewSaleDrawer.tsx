@@ -87,12 +87,12 @@ export function NewSaleDrawer({
 
   const filteredInventory = searchQuery 
     ? inventory.filter(item => 
-        item.status === 'active' && item.quantity > 0 &&
-        (item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.status === 'In Stock' && item.quantity > 0 &&
+        ((item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (item.id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (item.cardNumber && item.cardNumber.toLowerCase().includes(searchQuery.toLowerCase())))
       )
-    : inventory.filter(item => item.status === 'active' && item.quantity > 0);
+    : inventory.filter(item => item.status === 'In Stock' && item.quantity > 0);
 
   const addToCart = (item: any) => {
     setErrorMsg('');

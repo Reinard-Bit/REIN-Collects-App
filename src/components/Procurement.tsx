@@ -1,10 +1,14 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Search, Plus, PackageOpen, DollarSign, Calendar, User, Tag, Layers, Clock, Hash, Image as ImageIcon, Upload, Loader2, Trash2, Check, X, QrCode as QrCodeIcon, Camera, Link as LinkIcon } from 'lucide-react';
+import { Search, Plus, PackageOpen, DollarSign, Calendar, User, Tag, Layers, Clock, Hash, Image as ImageIcon, Upload, Loader2, Trash2, Check, X, QrCode as QrCodeIcon, Camera, Link as LinkIcon, Edit } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { formatIDR } from '../utils/currency';
 import { CurrencyInput } from './CurrencyInput';
 import { InventoryItem, CatalogItem } from '../App';
 import { BatchQRGeneratorModal } from './BatchQRGeneratorModal';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { DB_PATHS } from '../utils/dbConfig';
+import { CsvImporter } from './CsvImporter';
 
 export interface ProcurementRecord {
   id: string;
@@ -22,16 +26,39 @@ interface ProcurementProps {
   onAddItem: (item: InventoryItem) => void;
   procurementRecords: ProcurementRecord[];
   onAddProcurements: (records: ProcurementRecord[]) => void;
+  onDeleteProcurement?: (record: ProcurementRecord) => void;
+  onEditProcurement?: (record: ProcurementRecord) => void;
   onNavigateToHistory: () => void;
   initialSerialNumber?: string | null;
   onOpenScanner?: () => void;
 }
 
-type ProcurementMode = 'manual' | 'scanner';
+type ProcurementMode = 'manual' | 'scanner' | 'bulk-import';
 
-export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAddProcurements, onNavigateToHistory, initialSerialNumber, onOpenScanner }: ProcurementProps) {
+export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAddProcurements, onDeleteProcurement, onEditProcurement, onNavigateToHistory, initialSerialNumber, onOpenScanner }: ProcurementProps) {
   const [mode, setMode] = useState<ProcurementMode>('manual');
   const [showBatchQRModal, setShowBatchQRModal] = useState(false);
+  const [editingItem, setEditingItem] = useState<ProcurementRecord | null>(null);
+  const [editForm, setEditForm] = useState({ supplier: '', cost: 0 });
+
+  const handleEditClick = (proc: ProcurementRecord) => {
+    setEditingItem(proc);
+    setEditForm({ supplier: proc.supplier, cost: proc.totalCost });
+  };
+
+  const saveProcurementEdit = async () => {
+    if (!editingItem) return;
+    try {
+      const targetRef = doc(db, DB_PATHS.PROCUREMENTS, (editingItem as any).trueDbId || editingItem.id);
+      await updateDoc(targetRef, {
+        supplier: editForm.supplier,
+        totalCost: editForm.cost
+      });
+      setEditingItem(null);
+    } catch (e) {
+      console.error("Failed to update procurement", e);
+    }
+  };
   
   const recentProcurements = procurementRecords.slice(0, 5);
 
@@ -80,6 +107,16 @@ export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAd
               <div className={`w-2 h-2 rounded-full ${mode === 'scanner' ? 'bg-white animate-pulse' : 'bg-[#961b2b]'}`} />
               Bulk AI Scanner
             </button>
+            <button
+              onClick={() => setMode('bulk-import')}
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 sm:px-6 py-2 rounded-full text-sm font-medium transition-colors min-h-[38px] ${
+                mode === 'bulk-import'
+                  ? 'bg-black text-white shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900 bg-transparent'
+              }`}
+            >
+              📊 Bulk Import CSV
+            </button>
           </div>
         </div>
       </div>
@@ -94,7 +131,7 @@ export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAd
             initialSerialNumber={initialSerialNumber || ''}
             onOpenScanner={onOpenScanner}
           />
-        ) : (
+        ) : mode === 'scanner' ? (
           <BulkScannerInterface 
             onAddItems={(items) => {
               items.forEach(onAddItem);
@@ -103,7 +140,9 @@ export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAd
             onAddProcurements={(records) => onAddProcurements(records)}
             onOpenScanner={onOpenScanner}
           />
-        )}
+        ) : mode === 'bulk-import' ? (
+          <CsvImporter />
+        ) : null}
       </div>
 
       {/* Recent Procurements Ledger */}
@@ -118,110 +157,57 @@ export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAd
           </button>
         </div>
         
-        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm block md:table">
-              <thead>
-                <tr className="hidden md:table-row text-gray-500 border-b border-gray-200 bg-[#f2f2f2]/50">
-                  <th className="px-6 py-4 font-medium">Date</th>
-                  <th className="px-6 py-4 font-medium">Type</th>
-                  <th className="px-6 py-4 font-medium">Item / Description</th>
-                  <th className="px-6 py-4 font-medium">Supplier</th>
-                  <th className="px-6 py-4 font-medium text-right">Total Cost</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5 md:table-row-group block w-full">
-                {recentProcurements.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-8 text-center text-gray-500">
-                      No recent procurements
-                    </td>
-                  </tr>
-                ) : (
-                  recentProcurements.map((proc) => (
-                    <React.Fragment key={proc.id}>
-                      {/* Desktop view row */}
-                      <tr className="hidden md:table-row group hover:bg-white/[0.02] transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2 text-gray-700">
-                            <Clock size={14} className="text-gray-500" />
-                            {proc.date}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`px-2 py-1 rounded-md border text-xs font-medium whitespace-nowrap ${
-                            proc.type === 'Raw Card' 
-                              ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' 
-                              : proc.type === 'Graded Slab'
-                                ? 'bg-purple-500/10 border-purple-500/20 text-purple-400'
-                                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                          }`}>
-                            {proc.type}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-gray-900">{proc.itemName}</div>
-                          <div className="text-xs text-gray-500 mt-0.5">{proc.description}</div>
-                        </td>
-                        <td className="px-6 py-4 text-gray-500">
-                          {proc.supplier}
-                        </td>
-                        <td className="px-6 py-4 text-right font-mono text-gray-700">
-                          <span className="text-gray-500/50 mr-1">Rp</span>
-                          {formatIDR(proc.totalCost).replace('Rp', '').trim()}
-                        </td>
-                      </tr>
+        <div className="space-y-0">
+          {recentProcurements.length === 0 ? (
+            <div className="py-8 text-center text-gray-500 text-sm">
+              No recent procurements
+            </div>
+          ) : (
+            recentProcurements.map((proc) => (
+              <div key={proc.id} className="flex flex-row items-center gap-4 py-4 border-b border-gray-100 bg-white px-2">
+                {/* Product Thumbnail */}
+                <div className="w-14 h-14 bg-gray-50 rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden">
+                  <img src={(proc as any).imageUrl || 'https://images.unsplash.com/photo-1613771404784-3a5686aa2be3?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=80'} alt={proc.itemName} className="w-full h-full object-cover opacity-80" />
+                </div>
 
-                      {/* Mobile Card Stack item */}
-                      <tr className="md:hidden block w-full border-b border-gray-100 last:border-0 hover:bg-gray-50/30 transition-colors">
-                        <td className="block p-4 border-none bg-transparent w-full">
-                          <div className="flex flex-col gap-2.5">
-                            {/* Header */}
-                            <div className="flex justify-between items-start gap-2">
-                              <div className="font-bold text-gray-900 text-sm leading-snug break-words whitespace-normal">
-                                {proc.itemName}
-                              </div>
-                              <span className={`px-2 py-0.5 rounded border text-[10px] font-semibold whitespace-nowrap flex-shrink-0 ${
-                                proc.type === 'Raw Card' 
-                                  ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' 
-                                  : proc.type === 'Graded Slab'
-                                    ? 'bg-purple-500/10 border-purple-500/20 text-purple-400'
-                                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                              }`}>
-                                {proc.type}
-                              </span>
-                            </div>
+                {/* Text Block (Middle) */}
+                <div className="flex flex-col flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-gray-900 truncate">{proc.itemName}</span>
+                    <span className={`px-2 py-0.5 rounded border text-[10px] font-semibold whitespace-nowrap hidden sm:inline-flex ${
+                      proc.type === 'Raw Card' 
+                        ? 'bg-blue-500/10 border-blue-500/20 text-blue-500' 
+                        : proc.type === 'Graded Slab'
+                          ? 'bg-purple-500/10 border-purple-500/20 text-purple-500'
+                          : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600'
+                    }`}>
+                      {proc.type}
+                    </span>
+                  </div>
+                  <span className="text-xs text-gray-500 truncate mt-0.5">{proc.supplier} • {proc.date}</span>
+                  <span className="text-sm font-extrabold text-gray-900 mt-1">Rp {formatIDR(proc.totalCost).replace('Rp', '').trim()}</span>
+                </div>
 
-                            {/* Middle description/supplier info */}
-                            <div className="space-y-1">
-                              <div className="text-xs text-gray-500 leading-normal whitespace-normal">
-                                {proc.description}
-                              </div>
-                              <div className="text-[11px] text-gray-400">
-                                Supplier: <span className="text-gray-600 font-medium">{proc.supplier}</span>
-                              </div>
-                            </div>
-
-                            {/* Footer: Date & Total Cost */}
-                            <div className="flex justify-between items-center gap-2 pt-2 border-t border-gray-50">
-                              <div className="flex items-center gap-1.5 text-xs text-gray-400">
-                                <Clock size={12} />
-                                {proc.date}
-                              </div>
-                              <div className="font-mono text-sm font-bold text-gray-800">
-                                <span className="text-gray-400 text-xs font-normal mr-0.5">Rp</span>
-                                {formatIDR(proc.totalCost).replace('Rp', '').trim()}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    </React.Fragment>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                {/* Modern Action Buttons (Right) */}
+                <div className="flex items-center gap-2 ml-auto">
+                  <button 
+                    onClick={() => handleEditClick(proc)}
+                    className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors flex-shrink-0"
+                    title="Edit"
+                  >
+                    <Edit size={16} />
+                  </button>
+                  <button 
+                    onClick={() => onDeleteProcurement?.(proc)}
+                    className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors flex-shrink-0"
+                    title="Delete"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
       
@@ -229,6 +215,80 @@ export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAd
         isOpen={showBatchQRModal}
         onClose={() => setShowBatchQRModal(false)}
       />
+
+      <AnimatePresence>
+        {editingItem && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEditingItem(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <h3 className="text-lg font-bold text-gray-900">Edit Procurement</h3>
+                <button 
+                  onClick={() => setEditingItem(null)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Item Details</label>
+                  <p className="text-sm font-medium text-gray-900">{editingItem.itemName}</p>
+                </div>
+                
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Supplier</label>
+                  <input
+                    type="text"
+                    value={editForm.supplier}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, supplier: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm"
+                    placeholder="Supplier name"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Total Cost (Rp)</label>
+                  <CurrencyInput
+                    id="cost-basis"
+                    value={editForm.cost}
+                    onChange={(val) => setEditForm(prev => ({ ...prev, cost: val }))}
+                    placeholder="0"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-sm font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="px-6 py-4 bg-gray-50 flex items-center justify-end gap-2 border-t border-gray-100">
+                <button
+                  onClick={() => setEditingItem(null)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveProcurementEdit}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -335,6 +395,9 @@ function BulkScannerInterface({
             }));
           } catch (e) {
             console.error("Failed to parse JSON for tempId", tempId, text);
+            if (text.includes("Cookie check") || text.includes("aistudio_auth_flow")) {
+              setScanError("Environment cookie check blocked the AI API. Please open the app in a new tab.");
+            }
           }
         } else {
           const text = await response.text();
@@ -722,6 +785,7 @@ function ManualEntryForm({
   const [category, setCategory] = useState('Single'); // 'Single' = Raw Card, 'Slab' = Graded Slab, 'Sealed' = Sealed Product
   const [sealedType, setSealedType] = useState('Sealed Box');
   const [costBasis, setCostBasis] = useState(0);
+  const [quantity, setQuantity] = useState(1);
   const [itemName, setItemName] = useState('');
   const [cardSetName, setCardSetName] = useState('');
   const [imageUrl, setImageUrl] = useState('');
@@ -750,7 +814,7 @@ function ManualEntryForm({
   });
 
   const filteredSuggestions = masterCatalog.filter(c => 
-    itemName && c.itemName.toLowerCase().includes(itemName.toLowerCase())
+    itemName && c?.itemName?.toLowerCase().includes(itemName.toLowerCase())
   ).slice(0, 5);
 
   const handleSelectSuggestion = (suggestion: CatalogItem) => {
@@ -801,6 +865,11 @@ function ManualEntryForm({
             }
           } catch (e) {
             console.error("Failed to parse JSON, raw response:", text);
+            if (text.includes("Cookie check") || text.includes("aistudio_auth_flow")) {
+              setScanError("Environment cookie check blocked the API. Please open the app in a new tab.");
+            } else {
+              setScanError("Failed to parse AI response. Please input manually.");
+            }
           }
         } else {
           const text = await response.text();
@@ -920,7 +989,7 @@ function ManualEntryForm({
     const selectedDateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
     const formattedAcquisitionDate = selectedDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
-    const newItem: InventoryItem = {
+    const finalPayload: any = {
       id: assignedId,
       name: itemName,
       set: cardSetName,
@@ -929,15 +998,24 @@ function ManualEntryForm({
       foilType: isBoxOrCase ? 'N/A' : foilType,
       gradingCompany: category === 'Slab' ? gradingCompany : null,
       certNumber: category === 'Slab' ? certNumber : null,
-      quantity: 1,
-      costBasis,
+      stock: Number(quantity) || 1,
+      costBasis: Number(String(costBasis).replace(/[^0-9.-]+/g,"")) || 0,
       currentPrice: 0,
       imageUrl: imageUrl || null,
       cardNumber: isBoxOrCase ? '' : cardNumber,
       rarity: isBoxOrCase ? '' : rarity,
       language,
-      acquisitionDate: formattedAcquisitionDate
+      acquisitionDate: formattedAcquisitionDate,
+      status: "In Stock"
     };
+
+    console.log("📦 Final Procurement Payload:", finalPayload);
+
+    const newItem: InventoryItem = {
+      ...finalPayload,
+      quantity: finalPayload.stock, // Remap for local application interface
+      costBasis: finalPayload.costBasis
+    } as unknown as InventoryItem;
 
     const newRecord: ProcurementRecord = {
       id: `PRC-${Date.now()}`,
@@ -946,7 +1024,7 @@ function ManualEntryForm({
       itemName: itemName,
       description: `${cardSetName}${!isBoxOrCase && cardNumber ? ` • ${cardNumber}` : ''}`,
       supplier: supplier || 'Unknown',
-      totalCost: costBasis
+      totalCost: costBasis * quantity
     };
 
     onAddProcurement(newRecord);
@@ -974,6 +1052,7 @@ function ManualEntryForm({
       setCardNumber('');
       setRarity('');
       setCostBasis(0);
+      setQuantity(1);
       setSupplier('');
       setCertNumber('');
       setGradingCompany('');
@@ -1467,7 +1546,7 @@ function ManualEntryForm({
               transition={{ duration: 0.15 }}
               className="space-y-6"
             >
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="flex flex-col gap-1 relative">
                   <label className="text-sm font-medium text-slate-700">Cost Basis (Amt Paid)</label>
                   <CurrencyInput 
@@ -1476,6 +1555,16 @@ function ManualEntryForm({
                     className={`w-full h-[38px] bg-white border ${errors.costBasis ? '!border-[#961b2b]' : 'border-[#e0e0e0]'} rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-[#961b2b] transition-all`}
                   />
                   {errors.costBasis && <span className="absolute -bottom-4 right-0 text-[10px] font-bold text-[#961b2b]">REQUIRED</span>}
+                </div>
+                <div className="flex flex-col gap-1 relative">
+                  <label className="text-sm font-medium text-slate-700">Quantity</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={quantity}
+                    onChange={(e) => setQuantity(Number(e.target.value))}
+                    className="w-full h-[38px] bg-white border border-[#e0e0e0] rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-[#961b2b] transition-all"
+                  />
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Supplier / Seller</label>

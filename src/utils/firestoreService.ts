@@ -1,12 +1,13 @@
-import { doc, setDoc, deleteDoc, collection, getDocs, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, updateDoc, collection, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from './firebaseUtils';
 import { InventoryItem, CatalogItem, ProcurementRecord } from '../App';
+import { DB_PATHS, formatInventoryItem, formatCapitalInjection } from './dbConfig';
 
 export const firestoreService = {
   // Settings
   async saveSettings(userId: string, settings: any) {
-    const path = `users/${userId}/settings/store`;
+    const path = `${DB_PATHS.SETTINGS}`;
     try {
       await setDoc(doc(db, path), settings);
     } catch (e) {
@@ -18,10 +19,10 @@ export const firestoreService = {
   async saveInventoryItem(userId: string, item: InventoryItem) {
     // Generate valid id if not exists
     const itemId = item.id || `INV-${Date.now()}`;
-    const path = `users/${userId}/inventory/${itemId}`;
+    const path = `${DB_PATHS.INVENTORY}/${itemId}`;
     try {
       // Clean up item for firestore
-      const itemToSave = {
+      const itemToSave = formatInventoryItem({
         id: itemId,
         name: item.name || '',
         set: item.set || '',
@@ -30,16 +31,16 @@ export const firestoreService = {
         foilType: item.foilType || 'Non-Foil',
         gradingCompany: item.gradingCompany || null,
         certNumber: item.certNumber || null,
-        quantity: typeof item.quantity === 'number' ? item.quantity : 1,
-        costBasis: typeof item.costBasis === 'number' ? item.costBasis : 0,
-        currentPrice: typeof item.currentPrice === 'number' ? item.currentPrice : 0,
+        quantity: item.quantity,
+        costBasis: item.costBasis,
+        currentPrice: item.currentPrice,
         imageUrl: item.imageUrl || null,
         cardNumber: item.cardNumber || '',
         rarity: item.rarity || '',
         language: item.language || '',
         batches: item.batches || [],
         acquisitionDate: item.acquisitionDate || ''
-      };
+      });
       await setDoc(doc(db, path), itemToSave);
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, path);
@@ -47,7 +48,7 @@ export const firestoreService = {
   },
 
   async deleteInventoryItem(userId: string, itemId: string) {
-    const path = `users/${userId}/inventory/${itemId}`;
+    const path = `${DB_PATHS.INVENTORY}/${itemId}`;
     try {
       await deleteDoc(doc(db, path));
     } catch (e) {
@@ -58,7 +59,7 @@ export const firestoreService = {
   // Transactions
   async saveTransaction(userId: string, transaction: any) {
     const trxId = transaction.id || `TRX-${Date.now()}`;
-    const path = `users/${userId}/transactions/${trxId}`;
+    const path = `${DB_PATHS.TRANSACTIONS}/${trxId}`;
     try {
       const transactionToSave = {
         id: trxId,
@@ -78,7 +79,7 @@ export const firestoreService = {
   },
 
   async deleteTransaction(userId: string, transactionId: string) {
-    const path = `users/${userId}/transactions/${transactionId}`;
+    const path = `${DB_PATHS.TRANSACTIONS}/${transactionId}`;
     try {
       await deleteDoc(doc(db, path));
     } catch (e) {
@@ -86,9 +87,18 @@ export const firestoreService = {
     }
   },
 
+  async updateTransactionDate(userId: string, transactionId: string, newDateString: string) {
+    const path = `${DB_PATHS.TRANSACTIONS}/${transactionId}`;
+    try {
+      await updateDoc(doc(db, path), { date: newDateString });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, path);
+    }
+  },
+
   // Procurements
   async saveProcurementRecord(userId: string, record: ProcurementRecord) {
-    const path = `users/${userId}/procurements/${record.id}`;
+    const path = `${DB_PATHS.PROCUREMENTS}/${record.id}`;
     try {
       const recordToSave = {
         id: record.id,
@@ -105,9 +115,18 @@ export const firestoreService = {
     }
   },
 
+  async deleteProcurementRecord(userId: string, recordId: string) {
+    const path = `${DB_PATHS.PROCUREMENTS}/${recordId}`;
+    try {
+      await deleteDoc(doc(db, path));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, path);
+    }
+  },
+
   // Catalog
   async saveCatalogItem(userId: string, item: CatalogItem, indexId: string) {
-    const path = `users/${userId}/catalog/${indexId}`;
+    const path = `${DB_PATHS.MASTER_CATALOG}/${indexId}`;
     try {
       const itemToSave = {
         itemName: item.itemName || '',
@@ -122,7 +141,7 @@ export const firestoreService = {
   },
 
   async deleteCatalogItem(userId: string, indexId: string) {
-    const path = `users/${userId}/catalog/${indexId}`;
+    const path = `${DB_PATHS.MASTER_CATALOG}/${indexId}`;
     try {
       await deleteDoc(doc(db, path));
     } catch (e) {
@@ -132,13 +151,13 @@ export const firestoreService = {
 
   // Capital Injections
   async saveCapitalInjection(userId: string, injection: any) {
-    const path = `users/${userId}/capital_injections/${injection.id}`;
+    const path = `${DB_PATHS.CAPITAL_INJECTIONS}/${injection.id}`;
     try {
-      const injectionToSave = {
+      const injectionToSave = formatCapitalInjection({
         id: injection.id,
         date: injection.date || '',
         amount: typeof injection.amount === 'number' ? injection.amount : 0
-      };
+      });
       await setDoc(doc(db, path), injectionToSave);
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, path);

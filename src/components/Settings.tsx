@@ -10,11 +10,13 @@ import {
   Check, 
   Info,
   ShieldAlert,
-  HelpCircle
+  HelpCircle,
+  HardDriveUpload
 } from 'lucide-react';
 import { CatalogItem } from '../App';
 import { useFirebase } from '../contexts/FirebaseContext';
 import { firestoreService } from '../utils/firestoreService';
+import { CsvImporter } from './CsvImporter';
 
 interface SettingsProps {
   masterCatalog: CatalogItem[];
@@ -30,7 +32,7 @@ export function Settings({
   cashReserve = 0 
 }: SettingsProps) {
   const { user } = useFirebase();
-  const [activeTab, setActiveTab] = useState<'catalog' | 'preferences'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'preferences' | 'import'>('catalog');
   
   // Search state for autocomplete catalog
   const [searchQuery, setSearchQuery] = useState('');
@@ -85,10 +87,10 @@ export function Settings({
     const term = searchQuery.toLowerCase().trim();
     if (!term) return true;
     return (
-      item.itemName.toLowerCase().includes(term) ||
-      item.setName.toLowerCase().includes(term) ||
-      (item.cardNumber || '').toLowerCase().includes(term) ||
-      (item.rarity || '').toLowerCase().includes(term)
+      (item?.itemName || '').toLowerCase().includes(term) ||
+      (item?.setName || '').toLowerCase().includes(term) ||
+      (item?.cardNumber || '').toLowerCase().includes(term) ||
+      (item?.rarity || '').toLowerCase().includes(term)
     );
   });
 
@@ -97,11 +99,9 @@ export function Settings({
     const item = masterCatalog[originalIndex];
     if (!item) return;
 
-    if (window.confirm(`Are you sure you want to delete "${item.itemName}" from the master autocomplete catalog?`)) {
-      const updatedCatalog = [...masterCatalog];
-      updatedCatalog.splice(originalIndex, 1);
-      onUpdateCatalog(updatedCatalog);
-    }
+    const updatedCatalog = [...masterCatalog];
+    updatedCatalog.splice(originalIndex, 1);
+    onUpdateCatalog(updatedCatalog);
   };
 
   // Edit Action - opens modal
@@ -116,7 +116,7 @@ export function Settings({
     if (editingIndex === null || !editItem) return;
 
     if (!editItem.itemName.trim() || !editItem.setName.trim()) {
-      alert("Item Name and Set Name are required.");
+      console.warn("Item Name and Set Name are required.");
       return;
     }
 
@@ -137,21 +137,8 @@ export function Settings({
   const handleCreateItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItem.itemName.trim() || !newItem.setName.trim()) {
-      alert("Item Name and Set Name are required.");
+      console.warn("Item Name and Set Name are required.");
       return;
-    }
-
-    // Check duplicate
-    const isDuplicate = masterCatalog.some(
-      item => 
-        item.itemName.toLowerCase() === newItem.itemName.toLowerCase().trim() && 
-        item.setName.toLowerCase() === newItem.setName.toLowerCase().trim()
-    );
-
-    if (isDuplicate) {
-      if (!window.confirm("A card with this exact Name and Set already exists in the catalog. Code autocomplete will favor existing matches. Do you still want to insert this duplicate entry?")) {
-        return;
-      }
     }
 
     const created: CatalogItem = {
@@ -203,6 +190,17 @@ export function Settings({
         >
           <Sliders size={16} />
           General Preferences
+        </button>
+        <button
+          onClick={() => setActiveTab('import')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+            activeTab === 'import'
+              ? 'border-[#961b2b] text-[#961b2b]'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          <HardDriveUpload size={16} />
+          Data Import
         </button>
       </div>
 
@@ -459,6 +457,10 @@ export function Settings({
             </div>
           </form>
         </div>
+      )}
+
+      {activeTab === 'import' && (
+        <CsvImporter />
       )}
 
       {/* CREATE CARD MODAL */}

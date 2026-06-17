@@ -38,9 +38,7 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
   }, []);
 
   const handleDelete = (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to delete ${name}?`)) {
-      onDeleteItem(id);
-    }
+    onDeleteItem(id);
   };
   
   const categories = ['All', 'Singles', 'Sealed', 'Accessory', 'Slab'];
@@ -85,9 +83,9 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
 
   const filteredItems = items.filter(item => {
     const matchesCategory = activeCategory === 'All' || item.category === activeCategory;
-    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          item.set.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          item.id.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = (item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          (item.set || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (item.id || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCategory && matchesSearch;
   });
 
@@ -106,12 +104,12 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
       };
     }
     
-    if (item.status === 'active') {
+    if (item.status === 'In Stock') {
       const qty = item.quantity || 1;
       acc[key].totalCostBasis += (item.costBasis || 0) * qty;
       acc[key].quantity += qty;
       acc[key].underlyingIds.push(item.id);
-    } else if (item.status === 'sold') {
+    } else if (item.status === 'Sold') {
       acc[key].soldIds.push(item.id);
     }
     
@@ -125,85 +123,92 @@ export function Inventory({ items, onNavigateToProcurement, onUpdateItem, onDele
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header & Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
-          Inventory Control
-        </h2>
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-          <div className="relative flex-1 sm:flex-initial sm:w-80 w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by name, set, or SKU..."
-              className="w-full bg-white border border-gray-200 rounded-lg pl-10 pr-10 py-2.5 text-sm text-gray-800 placeholder-gray-500 focus:outline-none focus:border-[#961b2b]/50 focus:ring-1 focus:ring-[#961b2b]/50 transition-all min-h-[44px]"
-            />
+      {/* Header, Search & Filters flattened */}
+      <div className="flex flex-col gap-5 border-b border-gray-100 pb-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">
+            Inventory Control
+          </h2>
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <div className="relative flex-1 sm:flex-initial sm:w-80 w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name, set, or SKU..."
+                className="w-full bg-white border border-gray-200 rounded-lg pl-10 pr-10 py-2.5 text-sm text-gray-800 placeholder-gray-500 focus:outline-none focus:border-[#961b2b]/50 focus:ring-1 focus:ring-[#961b2b]/50 transition-all min-h-[44px]"
+              />
+              <button 
+                onClick={() => setIsScannerOpen(true)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[#961b2b] transition-colors p-1"
+                title="Scan Barcode"
+              >
+                <Camera size={18} />
+              </button>
+            </div>
             <button 
-              onClick={() => setIsScannerOpen(true)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[#961b2b] transition-colors p-1"
-              title="Scan Barcode"
+              onClick={onNavigateToProcurement}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium bg-[#961b2b] text-white rounded-lg hover:bg-[#961b2b]/90 shadow-sm transition-all whitespace-nowrap min-h-[44px] w-full sm:w-auto"
             >
-              <Camera size={18} />
+              <Plus size={16} />
+              Procure New Item
             </button>
           </div>
-          <button 
-            onClick={onNavigateToProcurement}
-            className="flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-[#961b2b] text-gray-900 rounded-lg hover:bg-[#961b2b]/90 shadow-[0_0_15px_rgba(150,27,43,0.3)] transition-all whitespace-nowrap min-h-[44px] w-full sm:w-auto"
-          >
-            <Plus size={16} />
-            Procure New Item
-          </button>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-4 bg-white p-4 rounded-xl border border-gray-200">
-        <div className="flex items-center gap-2 border-r border-gray-200 pr-4">
-          <Filter size={16} className="text-gray-500" />
-          <span className="text-sm font-medium text-gray-700">Filters</span>
-        </div>
-        
-        <div className="flex flex-wrap items-center gap-2">
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
-                activeCategory === cat
-                  ? 'bg-[#961b2b]/20 text-[#961b2b] border border-[#961b2b]/30'
-                  : 'bg-[#f2f2f2] text-gray-500 border border-gray-200 hover:border-gray-300 hover:text-gray-800'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-          
-          <div className="h-4 w-px bg-gray-200 mx-2 hidden sm:block"></div>
-          
-          <label className="flex items-center gap-2 cursor-pointer ml-2">
-            <input 
-              type="checkbox" 
-              checked={hideSoldOut} 
-              onChange={(e) => setHideSoldOut(e.target.checked)} 
-              className="rounded border-gray-300 text-[#961b2b] focus:ring-[#961b2b] transition-colors"
-            />
-            <span className="text-xs font-medium text-gray-600">Hide Sold Out</span>
-          </label>
         </div>
 
-        <div className="h-4 w-px bg-gray-200 mx-2 hidden sm:block"></div>
+        {/* Filters */}
+        <div className="flex flex-col xl:flex-row xl:items-center gap-4">
+          <div className="flex overflow-x-auto whitespace-nowrap gap-2 pb-2 lg:pb-0 hide-scrollbar w-full xl:w-auto flex-shrink-0">
+            <div className="flex items-center gap-2 border-r border-gray-200 pr-4 mr-2 hidden sm:flex">
+              <Filter size={16} className="text-gray-500" />
+              <span className="text-sm font-medium text-gray-700">Filters</span>
+            </div>
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors flex-shrink-0 ${
+                  activeCategory === cat
+                    ? 'bg-[#961b2b]/20 text-[#961b2b] border border-[#961b2b]/30'
+                    : 'bg-gray-50 text-gray-600 border border-gray-200 hover:border-gray-300 hover:text-gray-800'
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
 
-        <select defaultValue="" className="bg-[#f2f2f2] border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:border-[#961b2b]/50">
-          <option value="">Condition (All)</option>
-          {conditions.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full justify-between xl:justify-start">
+            <label className="flex items-center cursor-pointer gap-2 h-[38px]">
+              <div className="relative">
+                <input 
+                  type="checkbox" 
+                  className="sr-only" 
+                  checked={hideSoldOut} 
+                  onChange={(e) => setHideSoldOut(e.target.checked)} 
+                />
+                <div className={`block w-10 h-6 rounded-full transition-colors duration-200 ease-in-out ${hideSoldOut ? 'bg-[#961b2b]' : 'bg-gray-300'}`}></div>
+                <div className={`absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ease-in-out ${hideSoldOut ? 'translate-x-4' : 'translate-x-0'}`}></div>
+              </div>
+              <span className="text-sm font-medium text-gray-700 select-none">Hide Sold Out</span>
+            </label>
 
-        <select defaultValue="" className="bg-[#f2f2f2] border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:border-[#961b2b]/50">
-          <option value="">Foil Type (All)</option>
-          {foilTypes.map(f => <option key={f} value={f}>{f}</option>)}
-        </select>
+            <div className="h-4 w-px bg-gray-200 mx-1 hidden sm:block xl:block"></div>
+
+            <div className="grid grid-cols-2 gap-3 sm:flex sm:gap-2 w-full sm:w-auto flex-1">
+              <select defaultValue="" className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:border-[#961b2b]/50 w-full sm:w-auto h-[38px]">
+                <option value="">Condition (All)</option>
+                {conditions.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+
+              <select defaultValue="" className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:border-[#961b2b]/50 w-full sm:w-auto h-[38px]">
+                <option value="">Foil Type (All)</option>
+                {foilTypes.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Data Table */}

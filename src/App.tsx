@@ -18,7 +18,8 @@ import { BarcodeScanner } from './components/BarcodeScanner';
 // Firebase imports
 import { useFirebase } from './contexts/FirebaseContext';
 import { LoginGate } from './components/LoginGate';
-import { db } from './firebase';
+import { db, ACTIVE_USER_ID } from './firebase';
+import { DB_PATHS, formatInventoryItem, formatLedgerEntry, formatCapitalInjection } from './utils/dbConfig';
 import { collection, onSnapshot, doc, getDocs, deleteDoc, query, orderBy, addDoc, setDoc, where, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { firestoreService } from './utils/firestoreService';
 import { handleFirestoreError, OperationType } from './utils/firebaseUtils';
@@ -142,8 +143,19 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
+    const userUid = user.uid || ACTIVE_USER_ID;
+
+    // Reset local/state caches immediately to ensure clean view on switch/mount
+    setInventoryItems([]);
+    setTransactions([]);
+    setProcurementRecords([]);
+    setMasterCatalog([]);
+    setCapitalInjections([]);
+    setOutOfPocketCapital(0);
+    setCashReserve(0);
+
     // Load/Sync settings and stats
-    const settingsRef = doc(db, `users/${user.uid}/settings/store`);
+    const settingsRef = doc(db, DB_PATHS.SETTINGS);
     const unsubscribeSettings = onSnapshot(settingsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
@@ -155,7 +167,7 @@ export default function App() {
         if (typeof data.cashReserve === 'number') setCashReserve(data.cashReserve);
       } else {
         // Initialize settings in firestore if empty
-        firestoreService.saveSettings(user.uid, {
+        firestoreService.saveSettings(userUid, {
           storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
           currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
           defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
@@ -165,89 +177,99 @@ export default function App() {
         });
       }
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}/settings/store`);
+      handleFirestoreError(error, OperationType.GET, DB_PATHS.SETTINGS);
     });
 
     // 1. Inventory Items subscription
-    const q = query(collection(db, "users", user.uid, "inventory"));
+    const q = query(collection(db, DB_PATHS.INVENTORY));
     const unsubscribeInventory = onSnapshot(q, (snapshot) => {
-      const itemsData = snapshot.docs.map(doc => ({ ...doc.data() as any, id: doc.id }));
+      if (snapshot.empty) {
+        setInventoryItems([]);
+        return;
+      }
+      const itemsData = snapshot.docs.map(doc => ({ ...doc.data(), trueDbId: doc.id } as any));
       setInventoryItems(itemsData); // Update state purely from the cloud
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/inventory`);
+      handleFirestoreError(error, OperationType.LIST, DB_PATHS.INVENTORY);
     });
 
     // 2. Transactions subscription
-    const unsubscribeTransactions = onSnapshot(collection(db, `users/${user.uid}/transactions`), (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach(d => {
-        items.push(d.data());
-      });
+    const unsubscribeTransactions = onSnapshot(collection(db, DB_PATHS.TRANSACTIONS), (snapshot) => {
+      if (snapshot.empty) {
+        setTransactions([]);
+        return;
+      }
+      const items = snapshot.docs.map(doc => ({ ...doc.data(), trueDbId: doc.id }));
       setTransactions(items);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/transactions`);
+      handleFirestoreError(error, OperationType.LIST, DB_PATHS.TRANSACTIONS);
     });
 
     // 3. Procurements subscription
-    const unsubscribeProcurements = onSnapshot(collection(db, `users/${user.uid}/procurements`), (snapshot) => {
-      const items: ProcurementRecord[] = [];
-      snapshot.forEach(d => {
-        items.push(d.data() as ProcurementRecord);
-      });
+    const unsubscribeProcurements = onSnapshot(collection(db, DB_PATHS.PROCUREMENTS), (snapshot) => {
+      if (snapshot.empty) {
+        setProcurementRecords([]);
+        return;
+      }
+      const items = snapshot.docs.map(doc => ({ ...doc.data(), trueDbId: doc.id } as any));
       setProcurementRecords(items);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/procurements`);
+      handleFirestoreError(error, OperationType.LIST, DB_PATHS.PROCUREMENTS);
     });
 
     // 4. Catalog Items subscription
-    const unsubscribeCatalog = onSnapshot(collection(db, `users/${user.uid}/catalog`), (snapshot) => {
-      const items: CatalogItem[] = [];
-      snapshot.forEach(d => {
-        items.push(d.data() as CatalogItem);
-      });
+    const unsubscribeCatalog = onSnapshot(collection(db, DB_PATHS.MASTER_CATALOG), (snapshot) => {
+      if (snapshot.empty) {
+        setMasterCatalog([]);
+        return;
+      }
+      const items = snapshot.docs.map(doc => ({ ...doc.data(), trueDbId: doc.id } as any));
       setMasterCatalog(items);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/catalog`);
+      handleFirestoreError(error, OperationType.LIST, DB_PATHS.MASTER_CATALOG);
     });
 
     // 5. Capital Injections subscription
-    const unsubscribeInjections = onSnapshot(collection(db, `users/${user.uid}/capital_injections`), (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach(d => {
-        items.push(d.data());
-      });
+    const unsubscribeInjections = onSnapshot(collection(db, DB_PATHS.CAPITAL_INJECTIONS), (snapshot) => {
+      if (snapshot.empty) {
+        setCapitalInjections([]);
+        setOutOfPocketCapital(0);
+        setCashReserve(0);
+        return;
+      }
+      const items = snapshot.docs.map(doc => ({ ...doc.data(), trueDbId: doc.id } as any));
       setCapitalInjections(items);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `users/${user.uid}/capital_injections`);
+      handleFirestoreError(error, OperationType.LIST, DB_PATHS.CAPITAL_INJECTIONS);
     });
 
     // One-time local data recovery & migration to cloud if first login
-    const hasMigrated = localStorage.getItem(`bandit_cloud_migrated_${user.uid}`);
+    const hasMigrated = localStorage.getItem(`bandit_cloud_migrated_${userUid}`);
     if (!hasMigrated) {
       const performMigration = async () => {
         try {
           // Migration of catalog items
           const localCatalog = JSON.parse(localStorage.getItem('bandit_catalog') || '[]');
           for (let i = 0; i < localCatalog.length; i++) {
-            await firestoreService.saveCatalogItem(user.uid, localCatalog[i], `cat_${i}_${Date.now()}`);
+            await firestoreService.saveCatalogItem(userUid, localCatalog[i], `cat_${i}_${Date.now()}`);
           }
           // Migration of procurements
           const localProcurements = JSON.parse(localStorage.getItem('bandit_procurements') || '[]');
           for (const item of localProcurements) {
-            await firestoreService.saveProcurementRecord(user.uid, item);
+            await firestoreService.saveProcurementRecord(userUid, item);
           }
           // Migration of transactions
           const localTransactions = JSON.parse(localStorage.getItem('bandit_transactions') || '[]');
           for (const item of localTransactions) {
-            await firestoreService.saveTransaction(user.uid, item);
+            await firestoreService.saveTransaction(userUid, item);
           }
           // Migration of capital injections
           const localInjections = JSON.parse(localStorage.getItem('bandit_capital_injections') || '[]');
           for (const item of localInjections) {
-            await firestoreService.saveCapitalInjection(user.uid, item);
+            await firestoreService.saveCapitalInjection(userUid, item);
           }
           // Settings sync
-          await firestoreService.saveSettings(user.uid, {
+          await firestoreService.saveSettings(userUid, {
             storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
             currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
             defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
@@ -256,7 +278,7 @@ export default function App() {
             cashReserve
           });
           
-          localStorage.setItem(`bandit_cloud_migrated_${user.uid}`, 'true');
+          localStorage.setItem(`bandit_cloud_migrated_${userUid}`, 'true');
         } catch (migErr) {
           console.error("Migration during onboard failed", migErr);
         }
@@ -341,16 +363,30 @@ export default function App() {
     }, 1500);
   };
 
-  const handleInjectCapital = (amount: number) => {
+  const handleInjectCapital = async (amount: number) => {
     const displayDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const userUid = user?.uid || ACTIVE_USER_ID;
+    const injId = `INJ-${Date.now()}`;
     const newInjection = {
-      id: `INJ-${Date.now()}`,
+      id: injId,
       date: displayDate,
       amount: amount
     };
-    if (user) {
-      firestoreService.saveCapitalInjection(user.uid, newInjection);
-      firestoreService.saveSettings(user.uid, {
+    try {
+      await firestoreService.saveCapitalInjection(userUid, newInjection);
+
+      // Double-entry record to cash_ledger
+      const ledgerId = `LEDGER-${injId}`;
+      const entry = formatLedgerEntry({
+        date: serverTimestamp(),
+        flow: "Cash In",
+        sourceDescription: "Capital Injection",
+        amount: amount,
+        referenceId: injId
+      });
+      await setDoc(doc(db, DB_PATHS.CASH_LEDGER, ledgerId), entry);
+
+      await firestoreService.saveSettings(userUid, {
         storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
         currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
         defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
@@ -358,18 +394,16 @@ export default function App() {
         outOfPocketCapital: outOfPocketCapital + amount,
         cashReserve: cashReserve + amount
       });
-    } else {
-      setCapitalInjections(prev => [newInjection, ...prev]);
-      setOutOfPocketCapital(prev => prev + amount);
-      setCashReserve(prev => prev + amount);
+    } catch (err) {
+      console.error("Failed to inject capital:", err);
     }
   };
 
   const handleSaveItem = async (newItemData: InventoryItem) => {
     // 1. Save to inventory
     const docId = newItemData.id || `INV-${Date.now()}`;
-    const userUid = user?.uid || "admin_test_user";
-    await setDoc(doc(db, "users", userUid, "inventory", docId), { ...newItemData, id: docId, status: "active", dateAdded: new Date() });
+    const formattedItem = formatInventoryItem({ ...newItemData, id: docId, status: newItemData.status || "In Stock" });
+    await setDoc(doc(db, DB_PATHS.INVENTORY, docId), formattedItem);
 
     // 2. Write to master_catalog
     const { name, set, category, foilType, rarity, condition, cardNumber } = newItemData;
@@ -385,10 +419,10 @@ export default function App() {
         rarity: rarity || 'N/A',
         condition: condition || 'NM',
         cardNumber: cardNumber || '',
-        updatedAt: new Date()
+        updatedAt: serverTimestamp()
       };
 
-      await setDoc(doc(db, "master_catalog", uniqueId), catalogEntry, { merge: true });
+      await setDoc(doc(db, DB_PATHS.MASTER_CATALOG, uniqueId), catalogEntry, { merge: true });
     }
   };
 
@@ -405,6 +439,15 @@ export default function App() {
       firestoreService.deleteInventoryItem(user.uid, id);
     } else {
       setInventoryItems(prev => prev.filter(item => item.id !== id));
+    }
+  };
+
+  const handleUpdateTransactionDate = async (transactionId: string, newDateString: string) => {
+    const userUid = user?.uid || ACTIVE_USER_ID;
+    try {
+      await firestoreService.updateTransactionDate(userUid, transactionId, newDateString);
+    } catch (err) {
+      console.error("Failed to update transaction date", err);
     }
   };
 
@@ -486,13 +529,25 @@ export default function App() {
     }
   };
 
-  const handleAddProcurements = (records: ProcurementRecord[]) => {
-    if (user) {
-      records.forEach(record => {
-        firestoreService.saveProcurementRecord(user.uid, record);
-      });
+  const handleAddProcurements = async (records: ProcurementRecord[]) => {
+    const userUid = user?.uid || ACTIVE_USER_ID;
+    try {
+      for (const record of records) {
+        await firestoreService.saveProcurementRecord(userUid, record);
+        
+        // Double-entry record to cash_ledger
+        const ledgerId = `LEDGER-${record.id}`;
+        const entry = formatLedgerEntry({
+          date: serverTimestamp(),
+          flow: "Cash Out",
+          sourceDescription: `Procurement: ${record.itemName}`,
+          amount: record.totalCost,
+          referenceId: record.id
+        });
+        await setDoc(doc(db, DB_PATHS.CASH_LEDGER, ledgerId), entry);
+      }
       const totalCost = records.reduce((sum, record) => sum + record.totalCost, 0);
-      firestoreService.saveSettings(user.uid, {
+      await firestoreService.saveSettings(userUid, {
         storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
         currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
         defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
@@ -500,71 +555,128 @@ export default function App() {
         outOfPocketCapital,
         cashReserve: cashReserve - totalCost
       });
-    } else {
-      setProcurementRecords(prev => [...records, ...prev]);
-      const totalCost = records.reduce((sum, record) => sum + record.totalCost, 0);
-      setCashReserve(prev => prev - totalCost);
+    } catch (err) {
+      console.error("Failed to add procurements:", err);
     }
   };
 
-  const handleAddTransaction = async (transaction: any) => {
-    if (user) {
+  const handleDeleteProcurement = async (item: any) => {
+    if (window.confirm("Delete this procurement? This will refund your cash reserve.")) {
+      const userUid = user?.uid || ACTIVE_USER_ID;
+      const costToRefund = item.totalCost || 0;
+      
       try {
+        // Delete procurement record
+        await firestoreService.deleteProcurementRecord(userUid, item.id);
+        
+        // 1. Delete from inventory collection
+        const targetRef = doc(db, DB_PATHS.INVENTORY, item.id);
+        await deleteDoc(targetRef);
+        
+        // 2. Refund Cash Ledger (Find the matching cash-out and delete it)
+        const q = query(collection(db, DB_PATHS.CASH_LEDGER), where('referenceId', '==', item.id));
+        const snapshots = await getDocs(q);
         const batch = writeBatch(db);
-        
-        // 1. Transaction save
-        const trxId = transaction.id || `TRX-${Date.now()}`;
-        const transactionToSave = {
-          id: trxId,
-          date: transaction.date || '',
-          channel: transaction.channel || 'In-Store POS',
-          total: typeof transaction.total === 'number' ? transaction.total : 0,
-          cost: typeof transaction.cost === 'number' ? transaction.cost : 0,
-          platform_fee: typeof transaction.platform_fee === 'number' ? transaction.platform_fee : 0,
-          shipping_cost: typeof transaction.shipping_cost === 'number' ? transaction.shipping_cost : 0,
-          status: transaction.status || 'Completed',
-          items: transaction.items || []
-        };
-        const trxRef = doc(db, `users/${user.uid}/transactions/${trxId}`);
-        batch.set(trxRef, { ...transactionToSave, createdAt: serverTimestamp() });
-        
-        // 2. Mark specific items as sold
-        if (transaction.items && transaction.items.length > 0) {
-          transaction.items.forEach((item: any) => {
-            const itemRef = doc(db, "users", user.uid, "inventory", item.id);
-            batch.update(itemRef, { 
-              status: "sold", 
-              soldAt: serverTimestamp() 
-            });
-          });
+        let ledgerDeleted = false;
+        snapshots.forEach(docSnap => {
+           batch.delete(docSnap.ref);
+           ledgerDeleted = true;
+        });
+        if (ledgerDeleted) {
+           await batch.commit();
+        }
+
+        // Refund cash reserve
+        if (costToRefund > 0) {
+           await firestoreService.saveSettings(userUid, {
+              storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
+              currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
+              defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
+              defaultShipping: localStorage.getItem('bandit_def_shipping') || '0',
+              outOfPocketCapital,
+              cashReserve: cashReserve + costToRefund
+           });
         }
         
-        // 3. Update cash reserve settings
-        const netCashAdded = transactionToSave.total - transactionToSave.platform_fee - transactionToSave.shipping_cost;
-        const settingsToUpdate = {
-          storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
-          currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
-          defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
-          defaultShipping: localStorage.getItem('bandit_def_shipping') || '0',
-          outOfPocketCapital,
-          cashReserve: cashReserve + netCashAdded
-        };
-        const settingsRef = doc(db, `users/${user.uid}/settings/store`);
-        batch.set(settingsRef, settingsToUpdate, { merge: true });
-        
-        // Commit the batch
-        await batch.commit();
-
-      } catch (err) {
-        console.error("Failed to commit batch transaction:", err);
+        // 3. Update local UI state
+        setProcurementRecords(prev => prev.filter(p => p.id !== item.id));
+        setInventoryItems(prev => prev.filter(i => i.id !== item.id));
+      } catch (error) {
+        console.error("Error deleting procurement:", error);
       }
-    } else {
-      setTransactions(prev => [transaction, ...prev]);
-      const netCashAdded = transaction.total - (transaction.platform_fee || 0) - (transaction.shipping_cost || 0);
-      setCashReserve(prev => prev + netCashAdded);
-      // Local updates
-      const soldIds = transaction.items?.map((i: any) => i.id) || [];
-      setInventoryItems(prev => prev.filter(item => !soldIds.includes(item.id)));
+    }
+  };
+
+  const handleEditProcurement = (record: ProcurementRecord) => {
+    // Navigate to history or open an edit modal if we add one in the future.
+    setCurrentView('procurement');
+    setTimeout(() => {
+       alert("Ready to edit properties. You can recreate this procurement or we could build a dedicated modal here for: " + record.itemName);
+    }, 100);
+  };
+
+  const handleAddTransaction = async (transaction: any) => {
+    const userUid = user?.uid || ACTIVE_USER_ID;
+    try {
+      const batch = writeBatch(db);
+      
+      // 1. Transaction save
+      const trxId = transaction.id || `TRX-${Date.now()}`;
+      const transactionToSave = {
+        id: trxId,
+        date: transaction.date || '',
+        channel: transaction.channel || 'In-Store POS',
+        total: typeof transaction.total === 'number' ? transaction.total : 0,
+        cost: typeof transaction.cost === 'number' ? transaction.cost : 0,
+        platform_fee: typeof transaction.platform_fee === 'number' ? transaction.platform_fee : 0,
+        shipping_cost: typeof transaction.shipping_cost === 'number' ? transaction.shipping_cost : 0,
+        status: transaction.status || 'Completed',
+        items: transaction.items || []
+      };
+      const trxRef = doc(db, DB_PATHS.TRANSACTIONS, trxId);
+      batch.set(trxRef, { ...transactionToSave, createdAt: serverTimestamp() });
+      
+      // 2. Mark specific items as sold
+      if (transaction.items && transaction.items.length > 0) {
+        transaction.items.forEach((item: any) => {
+          const itemRef = doc(db, DB_PATHS.INVENTORY, item.id);
+          batch.update(itemRef, { 
+            status: "Sold", 
+            soldAt: serverTimestamp() 
+          });
+        });
+      }
+      
+      // 3. Update cash reserve settings
+      const netCashAdded = transactionToSave.total - transactionToSave.platform_fee - transactionToSave.shipping_cost;
+      const settingsToUpdate = {
+        storeName: localStorage.getItem('bandit_store_name') || 'REIN Collects',
+        currencySymbol: localStorage.getItem('bandit_currency') || 'IDR',
+        defaultPlatformFee: localStorage.getItem('bandit_def_platform_fee') || '10',
+        defaultShipping: localStorage.getItem('bandit_def_shipping') || '0',
+        outOfPocketCapital,
+        cashReserve: cashReserve + netCashAdded
+      };
+      const settingsRef = doc(db, DB_PATHS.SETTINGS);
+      batch.set(settingsRef, settingsToUpdate, { merge: true });
+
+      // 4. Double-entry record to cash_ledger (atomic batch)
+      const firstItem = transaction.items && transaction.items[0];
+      const itemName = firstItem ? firstItem.name : 'Custom POS/Manual Sale';
+      const ledgerRef = doc(db, DB_PATHS.CASH_LEDGER, `LEDGER-${trxId}`);
+      batch.set(ledgerRef, formatLedgerEntry({
+        date: serverTimestamp(),
+        flow: "Cash In",
+        sourceDescription: `POS Sale: ${itemName}`,
+        amount: netCashAdded,
+        referenceId: trxId
+      }));
+      
+      // Commit the batch
+      await batch.commit();
+
+    } catch (err) {
+      console.error("Failed to commit batch transaction:", err);
     }
   };
 
@@ -626,6 +738,8 @@ export default function App() {
               onAddItem={handleSaveItem} 
               procurementRecords={procurementRecords}
               onAddProcurements={handleAddProcurements}
+              onDeleteProcurement={handleDeleteProcurement}
+              onEditProcurement={handleEditProcurement}
               onNavigateToHistory={() => setCurrentView('procurementHistory')}
               initialSerialNumber={scannedProcurementEvent ? scannedProcurementEvent.code : ''}
               onOpenScanner={() => setIsGlobalScannerOpen(true)}
@@ -643,6 +757,7 @@ export default function App() {
               inventory={inventoryItems}
               transactions={transactions}
               onAddTransaction={handleAddTransaction}
+              onUpdateTransactionDate={handleUpdateTransactionDate}
               onUpdateInventory={handleUpdateInventory}
               initialSellItemCode={scannedSellEvent ? scannedSellEvent.code : ''}
             />
@@ -656,7 +771,7 @@ export default function App() {
               onUpdateCatalog={async (updated) => {
                 if (user) {
                   try {
-                    const catalogColl = collection(db, `users/${user.uid}/catalog`);
+                    const catalogColl = collection(db, DB_PATHS.MASTER_CATALOG);
                     const snapshot = await getDocs(catalogColl);
                     // Delete existing docs safely in parallel
                     const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));

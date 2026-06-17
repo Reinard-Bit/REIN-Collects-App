@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Search, Plus, X, ShoppingCart, Trash2, ArrowRight, Clock, Store, Globe, ShoppingBag, Package, Info, Camera, CheckCircle2 } from 'lucide-react';
+import { Search, Plus, X, ShoppingCart, Trash2, ArrowRight, Clock, Store, Globe, ShoppingBag, Package, Info, Camera, CheckCircle2, Edit } from 'lucide-react';
 import { formatIDR } from '../utils/currency';
 import { CurrencyInput } from './CurrencyInput';
 import { BarcodeScanner } from './BarcodeScanner';
@@ -10,11 +10,12 @@ interface TransactionsProps {
   inventory: any[];
   transactions: any[];
   onAddTransaction: (t: any) => void;
+  onUpdateTransactionDate?: (id: string, newDate: string) => void;
   onUpdateInventory: (items: {id: string, quantityToDeduct: number}[]) => void;
   initialSellItemCode?: string;
 }
 
-export function Transactions({ inventory, transactions, onAddTransaction, onUpdateInventory, initialSellItemCode }: TransactionsProps) {
+export function Transactions({ inventory, transactions, onAddTransaction, onUpdateTransactionDate, onUpdateInventory, initialSellItemCode }: TransactionsProps) {
   const [isNewSaleOpen, setIsNewSaleOpen] = useState(!!initialSellItemCode);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isProcessingScan, setIsProcessingScan] = useState(false);
@@ -26,6 +27,18 @@ export function Transactions({ inventory, transactions, onAddTransaction, onUpda
   const [shippingCost, setShippingCost] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState(false);
+  const [editingDateId, setEditingDateId] = useState<string | null>(null);
+
+  const handleEditDate = (trxId: string, currentDate: string) => {
+    setEditingDateId(trxId);
+    const newDateStr = window.prompt("Enter new transaction date (e.g. 15 Jun 2026):", currentDate);
+    if (newDateStr && newDateStr.trim() !== '' && newDateStr !== currentDate) {
+      if (onUpdateTransactionDate) {
+        onUpdateTransactionDate(trxId, newDateStr.trim());
+      }
+    }
+    setEditingDateId(null);
+  };
 
   const handleScan = (decodedText: string) => {
     if (scanLockRef.current) return;
@@ -46,8 +59,8 @@ export function Transactions({ inventory, transactions, onAddTransaction, onUpda
   const filteredInventory = searchQuery 
     ? inventory.filter(item => 
         item.quantity > 0 &&
-        (item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ((item.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (item.id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         (item.cardNumber && item.cardNumber.toLowerCase().includes(searchQuery.toLowerCase())))
       )
     : inventory.filter(item => item.quantity > 0);
@@ -227,7 +240,15 @@ export function Transactions({ inventory, transactions, onAddTransaction, onUpda
                         <td className="px-6 py-4">
                           <div className="font-mono font-medium text-gray-800">{trx.id}</div>
                           <div className="flex items-center gap-1.5 text-xs text-gray-500 mt-1">
-                            <Clock size={12} /> {trx.date}
+                            <Clock size={12} />
+                            <span>{trx.date}</span>
+                            <button 
+                              onClick={() => handleEditDate(trx.id, trx.date)}
+                              className="text-gray-400 hover:text-blue-600 transition-colors ml-1"
+                              title="Edit Date"
+                            >
+                              <Edit size={12} />
+                            </button>
                           </div>
                         </td>
                         <td className="px-6 py-4">
@@ -329,6 +350,13 @@ export function Transactions({ inventory, transactions, onAddTransaction, onUpda
                               <div className="flex items-center gap-1.5 text-xs text-gray-500 font-medium">
                                 <Clock size={12} className="text-gray-400" />
                                 <span>{trx.date}</span>
+                                <button 
+                                  onClick={() => handleEditDate(trx.id, trx.date)}
+                                  className="text-gray-400 hover:text-blue-600 transition-colors ml-1"
+                                  title="Edit Date"
+                                >
+                                  <Edit size={12} />
+                                </button>
                               </div>
                               {getChannelBadge(trx.channel)}
                             </div>

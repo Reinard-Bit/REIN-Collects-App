@@ -21,9 +21,9 @@ export function ProcurementHistory({ records, onBack }: ProcurementHistoryProps)
     // 2. Filter by Search Query
     const query = searchQuery.toLowerCase();
     const matchesSearch = 
-      record.itemName.toLowerCase().includes(query) ||
-      record.description.toLowerCase().includes(query) ||
-      record.supplier.toLowerCase().includes(query);
+      (record.itemName || '').toLowerCase().includes(query) ||
+      (record.description || '').toLowerCase().includes(query) ||
+      (record.supplier || '').toLowerCase().includes(query);
 
     return matchesTab && matchesSearch;
   });
@@ -59,12 +59,12 @@ export function ProcurementHistory({ records, onBack }: ProcurementHistoryProps)
       </div>
 
       {/* Tabs / Filter Pills */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+      <div className="flex overflow-x-auto gap-2 pb-2 w-full hide-scrollbar">
         {tabs.map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap flex-shrink-0 transition-colors ${
               activeTab === tab
                 ? 'bg-[#961b2b]/10 text-[#961b2b] border border-[#961b2b]/30'
                 : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-100 hover:text-gray-800'
@@ -76,8 +76,57 @@ export function ProcurementHistory({ records, onBack }: ProcurementHistoryProps)
       </div>
 
       {/* Data Table */}
-      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-2xl">
-        <div className="overflow-x-auto">
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+        
+        {/* Mobile List View */}
+        <div className="block md:hidden divide-y divide-gray-100">
+          {filteredRecords.length === 0 ? (
+            <div className="py-12 text-center text-gray-500 text-sm">
+              No matching records found.
+            </div>
+          ) : (
+            filteredRecords.map((proc) => (
+              <div key={proc.id} className="p-4 flex flex-col gap-3 hover:bg-gray-50/50 transition-colors">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-semibold text-gray-900 text-sm break-words whitespace-normal leading-snug">
+                    {proc.itemName}
+                  </span>
+                  <span className={`flex-shrink-0 px-2 py-0.5 rounded border text-[10px] font-semibold whitespace-nowrap ${
+                    proc.type === 'Raw Card' 
+                      ? 'bg-blue-500/10 border-blue-500/20 text-blue-500' 
+                      : proc.type === 'Graded Slab'
+                        ? 'bg-purple-500/10 border-purple-500/20 text-purple-500'
+                        : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600'
+                  }`}>
+                    {proc.type}
+                  </span>
+                </div>
+                
+                <div className="text-xs text-gray-500 leading-normal whitespace-normal">
+                  {proc.description}
+                </div>
+                
+                <div className="flex items-end justify-between mt-1">
+                  <div className="flex flex-col gap-1 text-xs text-gray-500 border-l-2 border-gray-100 pl-2">
+                    <div className="flex items-center gap-1.5">
+                      <Clock size={12} className="text-gray-400" />
+                      {proc.date}
+                    </div>
+                    <div>Supplier: <span className="font-medium text-gray-700">{proc.supplier}</span></div>
+                  </div>
+                  
+                  <div className="font-mono text-sm font-bold text-gray-900">
+                    <span className="text-gray-400 text-[11px] font-normal mr-0.5">Rp</span>
+                    {formatIDR(proc.totalCost).replace('Rp', '').trim()}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead>
               <tr className="text-gray-500 border-b border-gray-200 bg-[#f2f2f2]/50">
@@ -88,7 +137,7 @@ export function ProcurementHistory({ records, onBack }: ProcurementHistoryProps)
                 <th className="px-6 py-4 font-medium text-right">Total Cost</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-gray-100">
               {filteredRecords.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-gray-500">
@@ -97,33 +146,33 @@ export function ProcurementHistory({ records, onBack }: ProcurementHistoryProps)
                 </tr>
               ) : (
                 filteredRecords.map((proc) => (
-                  <tr key={proc.id} className="group hover:bg-white/[0.02] transition-colors">
+                  <tr key={proc.id} className="group hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-gray-700">
-                        <Clock size={14} className="text-gray-500" />
+                        <Clock size={14} className="text-gray-400" />
                         {proc.date}
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2 py-1 rounded-md border text-xs font-medium whitespace-nowrap ${
+                      <span className={`px-2 py-1 rounded border text-[11px] font-semibold whitespace-nowrap ${
                         proc.type === 'Raw Card' 
-                          ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' 
+                          ? 'bg-blue-500/10 border-blue-500/20 text-blue-500' 
                           : proc.type === 'Graded Slab'
-                            ? 'bg-purple-500/10 border-purple-500/20 text-purple-400'
-                            : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                            ? 'bg-purple-500/10 border-purple-500/20 text-purple-500'
+                            : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600'
                       }`}>
                         {proc.type}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="font-bold text-gray-900">{proc.itemName}</div>
+                      <div className="font-semibold text-gray-900">{proc.itemName}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{proc.description}</div>
                     </td>
                     <td className="px-6 py-4 text-gray-500">
                       {proc.supplier}
                     </td>
-                    <td className="px-6 py-4 text-right font-mono text-gray-700">
-                      <span className="text-gray-500/50 mr-1">Rp</span>
+                    <td className="px-6 py-4 text-right font-mono font-medium text-gray-900">
+                      <span className="text-gray-400 text-xs mr-0.5">Rp</span>
                       {formatIDR(proc.totalCost).replace('Rp', '').trim()}
                     </td>
                   </tr>

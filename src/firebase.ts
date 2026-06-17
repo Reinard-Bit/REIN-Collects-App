@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore, memoryLocalCache } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCgl7kxjSOOgKOd___Iwn6Yc_77tRt9h_I",
@@ -13,9 +13,12 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+export const db = initializeFirestore(app, {
+  localCache: memoryLocalCache(),
+});
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+export const ACTIVE_USER_ID = "admin_test_user";
 
 // Initialize Google provider options
 googleProvider.setCustomParameters({
