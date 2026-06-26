@@ -31,11 +31,12 @@ interface ProcurementProps {
   onNavigateToHistory: () => void;
   initialSerialNumber?: string | null;
   onOpenScanner?: () => void;
+  cashReserve?: number;
 }
 
 type ProcurementMode = 'manual' | 'scanner' | 'bulk-import';
 
-export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAddProcurements, onDeleteProcurement, onEditProcurement, onNavigateToHistory, initialSerialNumber, onOpenScanner }: ProcurementProps) {
+export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAddProcurements, onDeleteProcurement, onEditProcurement, onNavigateToHistory, initialSerialNumber, onOpenScanner, cashReserve = 0 }: ProcurementProps) {
   const [mode, setMode] = useState<ProcurementMode>('manual');
   const [showBatchQRModal, setShowBatchQRModal] = useState(false);
   const [editingItem, setEditingItem] = useState<ProcurementRecord | null>(null);
@@ -141,7 +142,7 @@ export function Procurement({ masterCatalog, onAddItem, procurementRecords, onAd
             onOpenScanner={onOpenScanner}
           />
         ) : mode === 'bulk-import' ? (
-          <CsvImporter />
+          <CsvImporter cashReserve={cashReserve} />
         ) : null}
       </div>
 

@@ -743,6 +743,7 @@ export default function App() {
               onNavigateToHistory={() => setCurrentView('procurementHistory')}
               initialSerialNumber={scannedProcurementEvent ? scannedProcurementEvent.code : ''}
               onOpenScanner={() => setIsGlobalScannerOpen(true)}
+              cashReserve={cashReserve}
             />
           )}
           {currentView === 'procurementHistory' && (
